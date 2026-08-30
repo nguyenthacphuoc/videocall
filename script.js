@@ -6,14 +6,21 @@ let currentCall = null;
 let localStream = null;
 let isMuted = false;
 let isVideoOff = false;
+let isPeerReady = false;
+
+// Khởi tạo PeerJS NGAY LẬP TỨC khi trang load
+initPeer();
 
 auth.onAuthStateChanged((user) => {
     currentUser = user;
     if (user) {
         updateUIForLoggedInUser(user);
         setUserOnline(user.uid, true);
-        initPeer();
         listenForFriendRequests();
+        // Lưu peerId khi có
+        if (myPeerId) {
+            savePeerId(user.uid, myPeerId);
+        }
     } else {
         updateUIForLoggedOutUser();
     }
@@ -29,13 +36,16 @@ function initPeer() {
     
     myPeer.on('open', (id) => {
         myPeerId = id;
-        console.log('📞 My Peer ID:', id);
-        // Lưu peerId vào user
-        db.collection('users').doc(currentUser.uid).update({
-            peerId: id
-        }).catch(() => {});
+        isPeerReady = true;
+        console.log('✅ PeerJS sẵn sàng! ID:', id);
+        
+        // Lưu peerId vào user nếu đã đăng nhập
+        if (currentUser) {
+            savePeerId(currentUser.uid, id);
+        }
     });
     
+    // NHẬN CUỘC GỌI ĐẾN
     myPeer.on('call', async (call) => {
         console.log('📞 CÓ CUỘC GỌI ĐẾN!');
         
@@ -46,18 +56,26 @@ function initPeer() {
                 localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 document.getElementById('localVideo').srcObject = localStream;
                 document.getElementById('callStatus').textContent = '📞 Đang kết nối...';
+                document.getElementById('callDuration').textContent = '00:00';
                 openModal('callModal');
                 
                 call.answer(localStream);
                 currentCall = call;
                 
                 call.on('stream', (remoteStream) => {
-                    console.log('📹 Nhận video từ người gọi!');
+                    console.log('📹 Nhận video!');
                     document.getElementById('remoteVideo').srcObject = remoteStream;
                     document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
+                    startCallTimer();
                 });
                 
                 call.on('close', () => {
+                    console.log('📵 Cuộc gọi kết thúc');
+                    endCall();
+                });
+                
+                call.on('error', (err) => {
+                    console.error('Call error:', err);
                     endCall();
                 });
                 
@@ -70,7 +88,30 @@ function initPeer() {
     
     myPeer.on('error', (err) => {
         console.error('Peer error:', err);
+        if (err.type === 'peer-unavailable') {
+            showToast('Người dùng không khả dụng!', 'error');
+            endCall();
+        }
     });
+    
+    // Nếu mất kết nối, thử lại
+    myPeer.on('disconnected', () => {
+        console.log('Disconnected, thử kết nối lại...');
+        setTimeout(() => {
+            myPeer.reconnect();
+        }, 1000);
+    });
+}
+
+async function savePeerId(userId, peerId) {
+    try {
+        await db.collection('users').doc(userId).update({
+            peerId: peerId
+        });
+        console.log('✅ Đã lưu peerId:', peerId);
+    } catch (error) {
+        console.error('Error saving peerId:', error);
+    }
 }
 
 async function setUserOnline(userId, isOnline) {
@@ -86,9 +127,8 @@ window.addEventListener('beforeunload', () => {
     if (currentUser) {
         db.collection('users').doc(currentUser.uid).update({ isOnline: false }).catch(() => {});
     }
-    if (currentCall) {
-        currentCall.close();
-    }
+    if (currentCall) currentCall.close();
+    if (myPeer) myPeer.destroy();
 });
 
 function updateUIForLoggedInUser(user) {
@@ -142,6 +182,7 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
         await userCredential.user.updateProfile({ displayName: name });
         await db.collection('users').doc(userCredential.user.uid).set({
             name, email, friends: [], friendRequests: [], isOnline: true,
+            peerId: myPeerId || null,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         hideLoading();
@@ -296,6 +337,7 @@ async function loadUsers() {
         for (const user of users) {
             const isFriend = currentUser ? (user.friends || []).includes(currentUser.uid) : false;
             const hasPendingRequest = currentUser ? (user.friendRequests || []).some(r => r.userId === currentUser.uid) : false;
+            const canCall = user.peerId && user.isOnline;
             const card = document.createElement('div');
             card.className = 'user-card';
             card.innerHTML = `
@@ -304,7 +346,7 @@ async function loadUsers() {
                 <span class="user-status ${user.isOnline ? 'status-online' : 'status-offline'}">${user.isOnline ? '🟢 Online' : '⚫ Offline'}</span>
                 <p class="user-email">${user.email}</p>
                 <div class="user-actions">
-                    ${isFriend ? `<button class="btn-call" onclick="startCall('${user.id}', '${user.name}')">📞 Gọi Video</button>` : ''}
+                    ${isFriend && canCall ? `<button class="btn-call" onclick="startCall('${user.id}', '${user.name}')">📞 Gọi Video</button>` : isFriend ? '<span style="color:#f59e0b;">⏳ Đang chờ...</span>' : ''}
                     ${!isFriend && !hasPendingRequest && currentUser ? `<button class="btn-add" onclick="quickAddFriend('${user.id}')">+ Kết Bạn</button>` : ''}
                     ${hasPendingRequest ? `<span style="color:#f59e0b;">⏳ Đã gửi lời mời</span>` : ''}
                 </div>
@@ -319,16 +361,14 @@ async function loadUsers() {
 // ============ GỌI ĐIỆN (PEERJS) ============
 async function startCall(calleeId, calleeName) {
     if (!currentUser) { showToast('Vui lòng đăng nhập!', 'error'); return; }
+    if (!isPeerReady || !myPeerId) { showToast('Đang khởi tạo, thử lại sau!', 'error'); return; }
     
     try {
         const calleeDoc = await db.collection('users').doc(calleeId).get();
         const calleeData = calleeDoc.data();
         const calleePeerId = calleeData.peerId;
         
-        if (!calleePeerId) { 
-            showToast(`${calleeName} chưa sẵn sàng!`, 'error'); 
-            return; 
-        }
+        if (!calleePeerId) { showToast(`${calleeName} chưa sẵn sàng!`, 'error'); return; }
         
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         document.getElementById('localVideo').srcObject = localStream;
@@ -341,17 +381,19 @@ async function startCall(calleeId, calleeName) {
         currentCall = myPeer.call(calleePeerId, localStream);
         
         currentCall.on('stream', (remoteStream) => {
-            console.log('📹 Nhận video từ người nhận!');
+            console.log('📹 Nhận video!');
             document.getElementById('remoteVideo').srcObject = remoteStream;
             document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
+            startCallTimer();
         });
         
         currentCall.on('close', () => {
+            console.log('📵 Kết thúc');
             endCall();
         });
         
         currentCall.on('error', (err) => {
-            console.error('Call error:', err);
+            console.error('Error:', err);
             showToast('Lỗi cuộc gọi!', 'error');
             endCall();
         });
@@ -360,6 +402,18 @@ async function startCall(calleeId, calleeName) {
         console.error('Error:', error);
         showToast('Không thể truy cập camera!', 'error');
     }
+}
+
+function startCallTimer() {
+    let seconds = 0;
+    if (window.callTimer) clearInterval(window.callTimer);
+    window.callTimer = setInterval(() => {
+        seconds++;
+        const m = Math.floor(seconds / 60);
+        const s = seconds % 60;
+        document.getElementById('callDuration').textContent = 
+            `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }, 1000);
 }
 
 function toggleMute() {
@@ -379,14 +433,13 @@ function toggleVideo() {
 }
 
 function endCall() {
-    if (currentCall) {
-        currentCall.close();
-        currentCall = null;
-    }
-    if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-        localStream = null;
-    }
+    if (window.callTimer) { clearInterval(window.callTimer); window.callTimer = null; }
+    if (currentCall) { currentCall.close(); currentCall = null; }
+    if (localStream) { localStream.getTracks().forEach(track => track.stop()); localStream = null; }
+    isMuted = false;
+    isVideoOff = false;
+    document.getElementById('muteBtn').textContent = '🎤';
+    document.getElementById('videoBtn').textContent = '📹';
     closeModal('callModal');
 }
 
