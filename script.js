@@ -21,11 +21,12 @@ const servers = {
     ]
 };
 
+// ============ AUTH ============
 auth.onAuthStateChanged((user) => {
     currentUser = user;
     if (user) {
         updateUIForLoggedInUser(user);
-        updateUserOnlineStatus(user.uid, true);
+        setUserOnline(user.uid, true);
         startPollingForCalls();
         listenForFriendRequests();
     } else {
@@ -35,21 +36,48 @@ auth.onAuthStateChanged((user) => {
     loadUsers();
 });
 
-async function updateUserOnlineStatus(userId, isOnline) {
+// ============ ONLINE STATUS ============
+async function setUserOnline(userId, isOnline) {
     try {
         await db.collection('users').doc(userId).update({
             isOnline: isOnline,
             lastSeen: firebase.firestore.FieldValue.serverTimestamp()
         });
-    } catch (error) {}
+    } catch (error) {
+        console.error('Error updating online:', error);
+    }
 }
 
-window.addEventListener('beforeunload', () => {
+// Khi đóng tab → offline
+window.addEventListener('beforeunload', (e) => {
     if (currentUser) {
-        db.collection('users').doc(currentUser.uid).update({ isOnline: false }).catch(() => {});
+        const userId = currentUser.uid;
+        fetch(`https://firestore.googleapis.com/v1/projects/happy-aa62c/databases/(default)/documents/users/${userId}?updateMask.fieldPaths=isOnline`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fields: { isOnline: { booleanValue: false } } })
+        }).catch(() => {});
     }
 });
 
+// Khi ẩn tab → offline, khi hiện lại → online
+document.addEventListener('visibilitychange', () => {
+    if (!currentUser) return;
+    if (document.hidden) {
+        setUserOnline(currentUser.uid, false);
+    } else {
+        setUserOnline(currentUser.uid, true);
+    }
+});
+
+// Logout → offline
+async function logout() {
+    if (currentUser) await setUserOnline(currentUser.uid, false);
+    await auth.signOut();
+    showToast('Đã đăng xuất!', 'info');
+}
+
+// ============ UI ============
 function updateUIForLoggedInUser(user) {
     document.getElementById('guestButtons').style.display = 'none';
     document.getElementById('userInfo').style.display = 'flex';
@@ -89,10 +117,9 @@ function showAddFriend() {
     else { showToast('Vui lòng đăng nhập!', 'error'); showLogin(); }
 }
 
-// ============ POLLING ============
+// ============ POLLING NHẬN CUỘC GỌI ============
 function startPollingForCalls() {
     stopPollingForCalls();
-    console.log('👂 Lắng nghe cuộc gọi...');
     
     pollInterval = setInterval(async () => {
         if (!currentUser) return;
@@ -181,12 +208,6 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
         document.getElementById('loginError').textContent = message;
     }
 });
-
-async function logout() {
-    if (currentUser) await updateUserOnlineStatus(currentUser.uid, false);
-    await auth.signOut();
-    showToast('Đã đăng xuất!', 'info');
-}
 
 // ============ KẾT BẠN ============
 document.getElementById('addFriendForm').addEventListener('submit', async (e) => {
