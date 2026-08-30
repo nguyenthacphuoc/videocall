@@ -7,9 +7,12 @@
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📞</text></svg>">
     <link rel="stylesheet" href="style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Firebase SDK -->
     <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-firestore-compat.js"></script>
+    <!-- PeerJS cho gọi video -->
+    <script src="https://unpkg.com/peerjs@1.5.1/dist/peerjs.min.js"></script>
 </head>
 <body>
     <div id="loadingSpinner" class="loading-spinner" style="display: none;">
@@ -100,7 +103,6 @@
             <div class="call-controls">
                 <button onclick="toggleMute()" id="muteBtn" class="call-btn" title="Tắt/Bật mic">🎤</button>
                 <button onclick="toggleVideo()" id="videoBtn" class="call-btn" title="Tắt/Bật camera">📹</button>
-                <button onclick="toggleScreenShare()" id="screenShareBtn" class="call-btn" title="Chia sẻ màn hình">🖥️</button>
                 <button onclick="endCall()" class="call-btn end-btn" title="Kết thúc">📵</button>
             </div>
         </div>
