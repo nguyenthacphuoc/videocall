@@ -7,7 +7,6 @@ let localStream = null;
 let isMuted = false;
 let isVideoOff = false;
 
-// Khởi tạo PeerJS ngay khi trang load
 initPeer();
 
 auth.onAuthStateChanged((user) => {
@@ -30,29 +29,20 @@ function initPeer() {
     myPeer.on('open', (id) => {
         myPeerId = id;
         console.log('✅ PeerJS ID:', id);
-        
         if (currentUser) {
-            db.collection('users').doc(currentUser.uid).update({
-                peerId: id
-            }).catch(() => {});
+            db.collection('users').doc(currentUser.uid).update({ peerId: id }).catch(() => {});
         }
     });
     
-    // NHẬN CUỘC GỌI
     myPeer.on('call', async (call) => {
         console.log('📞 CÓ CUỘC GỌI ĐẾN!');
-        
         const accept = confirm('📞 Có cuộc gọi video đến!\n\nChấp nhận?');
         
         if (accept) {
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ 
-                    video: true, 
-                    audio: true 
-                });
-                
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 const localVideo = document.getElementById('localVideo');
-                localVideo.srcObject = localStream;
+                if (localVideo) { localVideo.srcObject = localStream; localVideo.play().catch(() => {}); }
                 
                 document.getElementById('callStatus').textContent = '📞 Đang kết nối...';
                 document.getElementById('callDuration').textContent = '00:00';
@@ -62,17 +52,22 @@ function initPeer() {
                 currentCall = call;
                 
                 call.on('stream', (remoteStream) => {
-                    console.log('📹 NHẬN VIDEO!');
+                    console.log('📹 NHẬN REMOTE STREAM!');
                     const remoteVideo = document.getElementById('remoteVideo');
-                    remoteVideo.srcObject = remoteStream;
-                    document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
-                    startCallTimer();
+                    if (remoteVideo) {
+                        remoteVideo.srcObject = remoteStream;
+                        remoteVideo.play().then(() => {
+                            console.log('✅ Video đang phát!');
+                            document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
+                            startCallTimer();
+                        }).catch(() => {
+                            document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
+                            startCallTimer();
+                        });
+                    }
                 });
                 
-                call.on('close', () => {
-                    endCall();
-                });
-                
+                call.on('close', () => endCall());
             } catch (error) {
                 console.error('Error:', error);
                 showToast('Không thể truy cập camera!', 'error');
@@ -80,9 +75,7 @@ function initPeer() {
         }
     });
     
-    myPeer.on('disconnected', () => {
-        setTimeout(() => myPeer.reconnect(), 1000);
-    });
+    myPeer.on('disconnected', () => { setTimeout(() => myPeer.reconnect(), 1000); });
 }
 
 async function setUserOnline(userId, isOnline) {
@@ -177,22 +170,16 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     showLoading();
     try {
         await auth.signInWithEmailAndPassword(email, password);
-        
-        // Lưu peerId ngay sau khi đăng nhập
         if (myPeerId) {
             await db.collection('users').doc(auth.currentUser.uid).update({
-                peerId: myPeerId,
-                isOnline: true
+                peerId: myPeerId, isOnline: true
             });
         }
-        
         hideLoading();
         closeModal('loginModal');
         document.getElementById('loginForm').reset();
         showToast('Đăng nhập thành công!', 'success');
-        
-        // Refresh users sau 3 giây để peerId kịp lưu
-        setTimeout(() => loadUsers(), 3000);
+        setTimeout(() => loadUsers(), 2000);
     } catch (error) {
         hideLoading();
         let message = 'Đăng nhập thất bại!';
@@ -213,83 +200,185 @@ async function logout() {
 document.getElementById('addFriendForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!currentUser) { showToast('Vui lòng đăng nhập!', 'error'); return; }
+    
     const friendEmail = document.getElementById('friendEmail').value.trim();
+    if (!friendEmail) { document.getElementById('friendError').textContent = 'Vui lòng nhập email!'; return; }
     if (friendEmail === currentUser.email) { document.getElementById('friendError').textContent = 'Không thể kết bạn với chính mình!'; return; }
+    
     showLoading();
+    
     try {
         const snapshot = await db.collection('users').where('email', '==', friendEmail).get();
-        if (snapshot.empty) { document.getElementById('friendError').textContent = 'Không tìm thấy email!'; hideLoading(); return; }
+        
+        if (snapshot.empty) {
+            document.getElementById('friendError').textContent = 'Không tìm thấy email này!';
+            hideLoading();
+            return;
+        }
+        
         const friendDoc = snapshot.docs[0];
         const friendId = friendDoc.id;
         const friendData = friendDoc.data();
-        const currentUserDoc = await db.collection('users').doc(currentUser.uid).get();
-        const currentData = currentUserDoc.data();
-        const friends = currentData.friends || [];
-        if (friends.includes(friendId)) { document.getElementById('friendError').textContent = 'Đã là bạn bè!'; hideLoading(); return; }
-        const friendRequests = friendData.friendRequests || [];
-        if (friendRequests.some(r => r.userId === currentUser.uid)) { document.getElementById('friendError').textContent = 'Đã gửi lời mời!'; hideLoading(); return; }
-        friendRequests.push({ userId: currentUser.uid, name: currentUser.displayName || currentUser.email, email: currentUser.email, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
-        await db.collection('users').doc(friendId).update({ friendRequests });
+        
+        const myDoc = await db.collection('users').doc(currentUser.uid).get();
+        const myData = myDoc.data();
+        const myFriends = myData.friends || [];
+        
+        if (myFriends.includes(friendId)) {
+            document.getElementById('friendError').textContent = 'Đã là bạn bè!';
+            hideLoading();
+            return;
+        }
+        
+        const theirRequests = friendData.friendRequests || [];
+        
+        if (theirRequests.some(r => r.userId === currentUser.uid)) {
+            document.getElementById('friendError').textContent = 'Đã gửi lời mời!';
+            hideLoading();
+            return;
+        }
+        
+        theirRequests.push({
+            userId: currentUser.uid,
+            name: myData.name || currentUser.displayName || currentUser.email,
+            email: currentUser.email,
+            createdAt: new Date().toISOString()
+        });
+        
+        await db.collection('users').doc(friendId).update({
+            friendRequests: theirRequests
+        });
+        
+        console.log('✅ Đã gửi lời mời!');
+        
         hideLoading();
         closeModal('addFriendModal');
         document.getElementById('addFriendForm').reset();
+        document.getElementById('friendError').textContent = '';
         showToast(`Đã gửi lời mời đến ${friendData.name}!`, 'success');
-        loadUsers();
-    } catch (error) { hideLoading(); }
+        
+    } catch (error) {
+        hideLoading();
+        console.error('Error:', error);
+        document.getElementById('friendError').textContent = 'Lỗi khi gửi lời mời!';
+    }
 });
 
 function listenForFriendRequests() {
     if (!currentUser) return;
+    
     db.collection('users').doc(currentUser.uid).onSnapshot((doc) => {
         if (doc.exists) {
             const data = doc.data();
             const friendRequests = data.friendRequests || [];
+            
             if (friendRequests.length > 0) {
                 const request = friendRequests[0];
-                if (confirm(`🤝 ${request.name} muốn kết bạn! Chấp nhận?`)) acceptFriendRequest(request);
-                else declineFriendRequest(request);
+                console.log('🤝 Nhận lời mời từ:', request.name);
+                
+                const accept = confirm(`🤝 ${request.name} muốn kết bạn!\n\nChấp nhận?`);
+                
+                if (accept) {
+                    acceptFriendRequest(request);
+                } else {
+                    declineFriendRequest(request);
+                }
             }
         }
     });
 }
 
 async function acceptFriendRequest(request) {
-    const currentUserDoc = await db.collection('users').doc(currentUser.uid).get();
-    const currentData = currentUserDoc.data();
-    const myFriends = currentData.friends || [];
-    myFriends.push(request.userId);
-    await db.collection('users').doc(currentUser.uid).update({ friends: myFriends, friendRequests: [] });
-    const friendDoc = await db.collection('users').doc(request.userId).get();
-    const friendData = friendDoc.data();
-    const friendFriends = friendData.friends || [];
-    friendFriends.push(currentUser.uid);
-    await db.collection('users').doc(request.userId).update({ friends: friendFriends });
-    showToast(`Đã kết bạn với ${request.name}!`, 'success');
-    loadUsers();
+    try {
+        const myDoc = await db.collection('users').doc(currentUser.uid).get();
+        const myData = myDoc.data();
+        const myFriends = myData.friends || [];
+        
+        if (!myFriends.includes(request.userId)) {
+            myFriends.push(request.userId);
+        }
+        
+        await db.collection('users').doc(currentUser.uid).update({
+            friends: myFriends,
+            friendRequests: []
+        });
+        
+        const theirDoc = await db.collection('users').doc(request.userId).get();
+        const theirData = theirDoc.data();
+        const theirFriends = theirData.friends || [];
+        
+        if (!theirFriends.includes(currentUser.uid)) {
+            theirFriends.push(currentUser.uid);
+        }
+        
+        await db.collection('users').doc(request.userId).update({
+            friends: theirFriends
+        });
+        
+        showToast(`✅ Đã kết bạn với ${request.name}!`, 'success');
+        loadUsers();
+        
+    } catch (error) {
+        console.error('Error:', error);
+    }
 }
 
 async function declineFriendRequest(request) {
-    const currentUserDoc = await db.collection('users').doc(currentUser.uid).get();
-    const currentData = currentUserDoc.data();
-    const friendRequests = currentData.friendRequests || [];
-    const updatedRequests = friendRequests.filter(r => r.userId !== request.userId);
-    await db.collection('users').doc(currentUser.uid).update({ friendRequests: updatedRequests });
+    try {
+        const myDoc = await db.collection('users').doc(currentUser.uid).get();
+        const myData = myDoc.data();
+        const friendRequests = myData.friendRequests || [];
+        const updatedRequests = friendRequests.filter(r => r.userId !== request.userId);
+        
+        await db.collection('users').doc(currentUser.uid).update({
+            friendRequests: updatedRequests
+        });
+        
+    } catch (error) {
+        console.error('Error:', error);
+    }
 }
 
 async function quickAddFriend(friendId) {
     if (!currentUser) return;
-    const friendDoc = await db.collection('users').doc(friendId).get();
-    const friendData = friendDoc.data();
-    const currentUserDoc = await db.collection('users').doc(currentUser.uid).get();
-    const currentData = currentUserDoc.data();
-    const friends = currentData.friends || [];
-    if (friends.includes(friendId)) { showToast('Đã là bạn bè!', 'error'); return; }
-    const friendRequests = friendData.friendRequests || [];
-    if (friendRequests.some(r => r.userId === currentUser.uid)) { showToast('Đã gửi lời mời!', 'error'); return; }
-    friendRequests.push({ userId: currentUser.uid, name: currentUser.displayName || currentUser.email, email: currentUser.email, createdAt: firebase.firestore.FieldValue.serverTimestamp() });
-    await db.collection('users').doc(friendId).update({ friendRequests });
-    showToast(`Đã gửi lời mời đến ${friendData.name}!`, 'success');
-    loadUsers();
+    
+    try {
+        const friendDoc = await db.collection('users').doc(friendId).get();
+        const friendData = friendDoc.data();
+        
+        const myDoc = await db.collection('users').doc(currentUser.uid).get();
+        const myData = myDoc.data();
+        const myFriends = myData.friends || [];
+        
+        if (myFriends.includes(friendId)) {
+            showToast('Đã là bạn bè!', 'error');
+            return;
+        }
+        
+        const theirRequests = friendData.friendRequests || [];
+        
+        if (theirRequests.some(r => r.userId === currentUser.uid)) {
+            showToast('Đã gửi lời mời!', 'error');
+            return;
+        }
+        
+        theirRequests.push({
+            userId: currentUser.uid,
+            name: myData.name || currentUser.displayName || currentUser.email,
+            email: currentUser.email,
+            createdAt: new Date().toISOString()
+        });
+        
+        await db.collection('users').doc(friendId).update({
+            friendRequests: theirRequests
+        });
+        
+        showToast(`Đã gửi lời mời đến ${friendData.name}!`, 'success');
+        loadUsers();
+        
+    } catch (error) {
+        console.error('Error:', error);
+    }
 }
 
 // ============ LOAD USERS ============
@@ -329,9 +418,9 @@ async function loadUsers() {
                 <span class="user-status ${user.isOnline ? 'status-online' : 'status-offline'}">${user.isOnline ? '🟢 Online' : '⚫ Offline'}</span>
                 <p class="user-email">${user.email}</p>
                 <div class="user-actions">
-                    ${isFriend && canCall ? `<button class="btn-call" onclick="startCall('${user.id}', '${user.name}')">📞 Gọi Video</button>` : isFriend ? '<span style="color:#f59e0b;">⏳ Chờ peer...</span>' : ''}
+                    ${isFriend && canCall ? `<button class="btn-call" onclick="startCall('${user.id}', '${user.name}')">📞 Gọi Video</button>` : isFriend ? '<span style="color:#f59e0b;">⏳ Chờ...</span>' : ''}
                     ${!isFriend && !hasPendingRequest && currentUser ? `<button class="btn-add" onclick="quickAddFriend('${user.id}')">+ Kết Bạn</button>` : ''}
-                    ${hasPendingRequest ? `<span style="color:#f59e0b;">⏳ Đã gửi</span>` : ''}
+                    ${hasPendingRequest ? '<span style="color:#f59e0b;">⏳ Đã gửi</span>' : ''}
                 </div>
             `;
             userGrid.appendChild(card);
@@ -344,7 +433,7 @@ async function loadUsers() {
 // ============ GỌI ĐIỆN ============
 async function startCall(calleeId, calleeName) {
     if (!currentUser) { showToast('Vui lòng đăng nhập!', 'error'); return; }
-    if (!myPeerId) { showToast('Đang khởi tạo, đợi vài giây!', 'error'); return; }
+    if (!myPeerId) { showToast('Đang khởi tạo!', 'error'); return; }
     
     try {
         const calleeDoc = await db.collection('users').doc(calleeId).get();
@@ -354,20 +443,29 @@ async function startCall(calleeId, calleeName) {
         if (!calleePeerId) { showToast(`${calleeName} chưa sẵn sàng!`, 'error'); return; }
         
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        document.getElementById('localVideo').srcObject = localStream;
+        const localVideo = document.getElementById('localVideo');
+        if (localVideo) { localVideo.srcObject = localStream; localVideo.play().catch(() => {}); }
+        
         document.getElementById('callStatus').textContent = `📞 Đang gọi ${calleeName}...`;
         document.getElementById('callDuration').textContent = '00:00';
         openModal('callModal');
         
-        console.log('📞 Gọi đến:', calleePeerId);
-        
         currentCall = myPeer.call(calleePeerId, localStream);
         
         currentCall.on('stream', (remoteStream) => {
-            console.log('📹 NHẬN VIDEO!');
-            document.getElementById('remoteVideo').srcObject = remoteStream;
-            document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
-            startCallTimer();
+            console.log('📹 NHẬN REMOTE STREAM!');
+            const remoteVideo = document.getElementById('remoteVideo');
+            if (remoteVideo) {
+                remoteVideo.srcObject = remoteStream;
+                remoteVideo.play().then(() => {
+                    console.log('✅ Video đang phát!');
+                    document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
+                    startCallTimer();
+                }).catch(() => {
+                    document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
+                    startCallTimer();
+                });
+            }
         });
         
         currentCall.on('close', () => endCall());
