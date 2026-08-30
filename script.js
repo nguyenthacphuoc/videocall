@@ -6,9 +6,8 @@ let currentCall = null;
 let localStream = null;
 let isMuted = false;
 let isVideoOff = false;
-let isPeerReady = false;
 
-// Khởi tạo PeerJS NGAY LẬP TỨC khi trang load
+// Khởi tạo PeerJS ngay khi trang load
 initPeer();
 
 auth.onAuthStateChanged((user) => {
@@ -17,10 +16,6 @@ auth.onAuthStateChanged((user) => {
         updateUIForLoggedInUser(user);
         setUserOnline(user.uid, true);
         listenForFriendRequests();
-        // Lưu peerId khi có
-        if (myPeerId) {
-            savePeerId(user.uid, myPeerId);
-        }
     } else {
         updateUIForLoggedOutUser();
     }
@@ -28,24 +23,22 @@ auth.onAuthStateChanged((user) => {
 });
 
 function initPeer() {
-    if (myPeer) {
-        myPeer.destroy();
-    }
+    if (myPeer) myPeer.destroy();
     
     myPeer = new Peer();
     
     myPeer.on('open', (id) => {
         myPeerId = id;
-        isPeerReady = true;
-        console.log('✅ PeerJS sẵn sàng! ID:', id);
+        console.log('✅ PeerJS ID:', id);
         
-        // Lưu peerId vào user nếu đã đăng nhập
         if (currentUser) {
-            savePeerId(currentUser.uid, id);
+            db.collection('users').doc(currentUser.uid).update({
+                peerId: id
+            }).catch(() => {});
         }
     });
     
-    // NHẬN CUỘC GỌI ĐẾN
+    // NHẬN CUỘC GỌI
     myPeer.on('call', async (call) => {
         console.log('📞 CÓ CUỘC GỌI ĐẾN!');
         
@@ -53,8 +46,14 @@ function initPeer() {
         
         if (accept) {
             try {
-                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-                document.getElementById('localVideo').srcObject = localStream;
+                localStream = await navigator.mediaDevices.getUserMedia({ 
+                    video: true, 
+                    audio: true 
+                });
+                
+                const localVideo = document.getElementById('localVideo');
+                localVideo.srcObject = localStream;
+                
                 document.getElementById('callStatus').textContent = '📞 Đang kết nối...';
                 document.getElementById('callDuration').textContent = '00:00';
                 openModal('callModal');
@@ -63,19 +62,14 @@ function initPeer() {
                 currentCall = call;
                 
                 call.on('stream', (remoteStream) => {
-                    console.log('📹 Nhận video!');
-                    document.getElementById('remoteVideo').srcObject = remoteStream;
+                    console.log('📹 NHẬN VIDEO!');
+                    const remoteVideo = document.getElementById('remoteVideo');
+                    remoteVideo.srcObject = remoteStream;
                     document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
                     startCallTimer();
                 });
                 
                 call.on('close', () => {
-                    console.log('📵 Cuộc gọi kết thúc');
-                    endCall();
-                });
-                
-                call.on('error', (err) => {
-                    console.error('Call error:', err);
                     endCall();
                 });
                 
@@ -86,32 +80,9 @@ function initPeer() {
         }
     });
     
-    myPeer.on('error', (err) => {
-        console.error('Peer error:', err);
-        if (err.type === 'peer-unavailable') {
-            showToast('Người dùng không khả dụng!', 'error');
-            endCall();
-        }
-    });
-    
-    // Nếu mất kết nối, thử lại
     myPeer.on('disconnected', () => {
-        console.log('Disconnected, thử kết nối lại...');
-        setTimeout(() => {
-            myPeer.reconnect();
-        }, 1000);
+        setTimeout(() => myPeer.reconnect(), 1000);
     });
-}
-
-async function savePeerId(userId, peerId) {
-    try {
-        await db.collection('users').doc(userId).update({
-            peerId: peerId
-        });
-        console.log('✅ Đã lưu peerId:', peerId);
-    } catch (error) {
-        console.error('Error saving peerId:', error);
-    }
 }
 
 async function setUserOnline(userId, isOnline) {
@@ -206,10 +177,22 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     showLoading();
     try {
         await auth.signInWithEmailAndPassword(email, password);
+        
+        // Lưu peerId ngay sau khi đăng nhập
+        if (myPeerId) {
+            await db.collection('users').doc(auth.currentUser.uid).update({
+                peerId: myPeerId,
+                isOnline: true
+            });
+        }
+        
         hideLoading();
         closeModal('loginModal');
         document.getElementById('loginForm').reset();
         showToast('Đăng nhập thành công!', 'success');
+        
+        // Refresh users sau 3 giây để peerId kịp lưu
+        setTimeout(() => loadUsers(), 3000);
     } catch (error) {
         hideLoading();
         let message = 'Đăng nhập thất bại!';
@@ -330,7 +313,7 @@ async function loadUsers() {
         }
         if (currentList === 'online') users = users.filter(user => user.isOnline === true);
         if (users.length === 0) {
-            userGrid.innerHTML = '<p style="text-align:center;padding:40px;color:#64748b;">Không có người dùng nào.</p>';
+            userGrid.innerHTML = '<p style="text-align:center;padding:40px;">Không có người dùng nào.</p>';
             hideLoading();
             return;
         }
@@ -346,9 +329,9 @@ async function loadUsers() {
                 <span class="user-status ${user.isOnline ? 'status-online' : 'status-offline'}">${user.isOnline ? '🟢 Online' : '⚫ Offline'}</span>
                 <p class="user-email">${user.email}</p>
                 <div class="user-actions">
-                    ${isFriend && canCall ? `<button class="btn-call" onclick="startCall('${user.id}', '${user.name}')">📞 Gọi Video</button>` : isFriend ? '<span style="color:#f59e0b;">⏳ Đang chờ...</span>' : ''}
+                    ${isFriend && canCall ? `<button class="btn-call" onclick="startCall('${user.id}', '${user.name}')">📞 Gọi Video</button>` : isFriend ? '<span style="color:#f59e0b;">⏳ Chờ peer...</span>' : ''}
                     ${!isFriend && !hasPendingRequest && currentUser ? `<button class="btn-add" onclick="quickAddFriend('${user.id}')">+ Kết Bạn</button>` : ''}
-                    ${hasPendingRequest ? `<span style="color:#f59e0b;">⏳ Đã gửi lời mời</span>` : ''}
+                    ${hasPendingRequest ? `<span style="color:#f59e0b;">⏳ Đã gửi</span>` : ''}
                 </div>
             `;
             userGrid.appendChild(card);
@@ -358,10 +341,10 @@ async function loadUsers() {
     } finally { hideLoading(); }
 }
 
-// ============ GỌI ĐIỆN (PEERJS) ============
+// ============ GỌI ĐIỆN ============
 async function startCall(calleeId, calleeName) {
     if (!currentUser) { showToast('Vui lòng đăng nhập!', 'error'); return; }
-    if (!isPeerReady || !myPeerId) { showToast('Đang khởi tạo, thử lại sau!', 'error'); return; }
+    if (!myPeerId) { showToast('Đang khởi tạo, đợi vài giây!', 'error'); return; }
     
     try {
         const calleeDoc = await db.collection('users').doc(calleeId).get();
@@ -376,22 +359,18 @@ async function startCall(calleeId, calleeName) {
         document.getElementById('callDuration').textContent = '00:00';
         openModal('callModal');
         
-        console.log('📞 Gọi đến peerId:', calleePeerId);
+        console.log('📞 Gọi đến:', calleePeerId);
         
         currentCall = myPeer.call(calleePeerId, localStream);
         
         currentCall.on('stream', (remoteStream) => {
-            console.log('📹 Nhận video!');
+            console.log('📹 NHẬN VIDEO!');
             document.getElementById('remoteVideo').srcObject = remoteStream;
             document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
             startCallTimer();
         });
         
-        currentCall.on('close', () => {
-            console.log('📵 Kết thúc');
-            endCall();
-        });
-        
+        currentCall.on('close', () => endCall());
         currentCall.on('error', (err) => {
             console.error('Error:', err);
             showToast('Lỗi cuộc gọi!', 'error');
@@ -464,3 +443,15 @@ function showOnlineUsers() {
 document.addEventListener('DOMContentLoaded', () => {
     loadUsers();
 });
+
+// Tự động lưu peerId mỗi 5 giây
+setInterval(async () => {
+    if (currentUser && myPeerId) {
+        try {
+            await db.collection('users').doc(currentUser.uid).update({
+                peerId: myPeerId,
+                isOnline: true
+            });
+        } catch (error) {}
+    }
+}, 5000);
