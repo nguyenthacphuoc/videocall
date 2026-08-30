@@ -3,151 +3,147 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VideoCall - Gọi Điện & Kết Bạn</title>
+    <title>VideoCall - Gọi Điện</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📞</text></svg>">
-    <link rel="stylesheet" href="style.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #f0f2f5; }
+        .container { max-width: 500px; margin: 50px auto; padding: 20px; text-align: center; }
+        h1 { color: #1877f2; margin-bottom: 20px; }
+        .form-group { margin-bottom: 15px; text-align: left; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; }
+        button { width: 100%; padding: 14px; background: #1877f2; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
+        button:hover { background: #166fe5; }
+        #videoContainer { display: none; margin-top: 20px; }
+        iframe { width: 100%; height: 500px; border: none; border-radius: 10px; }
+    </style>
     <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-firestore-compat.js"></script>
 </head>
 <body>
-    <div id="loadingSpinner" class="loading-spinner" style="display: none;">
-        <div class="spinner"></div>
-    </div>
-
-    <!-- Modal Đăng Nhập -->
-    <div id="loginModal" class="modal">
-        <div class="modal-content">
-            <span class="close" onclick="closeModal('loginModal')">&times;</span>
-            <div class="modal-icon">🔐</div>
-            <h2>Đăng Nhập</h2>
-            <form id="loginForm">
-                <div class="form-group">
-                    <label>📧 Email:</label>
-                    <input type="email" id="loginEmail" placeholder="example@email.com" required>
-                </div>
-                <div class="form-group">
-                    <label>🔒 Mật khẩu:</label>
-                    <input type="password" id="loginPassword" placeholder="Nhập mật khẩu" required>
-                </div>
-                <button type="submit" class="btn-primary">Đăng Nhập</button>
-                <p id="loginError" class="error-message"></p>
-                <p class="register-link">Chưa có tài khoản? <a href="#" onclick="showRegister()">Đăng ký</a></p>
-            </form>
-        </div>
-    </div>
-
-    <!-- Modal Đăng Ký -->
-    <div id="registerModal" class="modal">
-        <div class="modal-content">
-            <span class="close" onclick="closeModal('registerModal')">&times;</span>
-            <div class="modal-icon">📝</div>
-            <h2>Tạo Tài Khoản</h2>
-            <form id="registerForm">
-                <div class="form-group">
-                    <label>👤 Họ tên:</label>
-                    <input type="text" id="regName" placeholder="Nguyễn Văn A" required>
-                </div>
-                <div class="form-group">
-                    <label>📧 Email:</label>
-                    <input type="email" id="regEmail" placeholder="example@email.com" required>
-                </div>
-                <div class="form-group">
-                    <label>🔒 Mật khẩu:</label>
-                    <input type="password" id="regPassword" placeholder="Ít nhất 6 ký tự" required minlength="6">
-                </div>
-                <button type="submit" class="btn-primary">Đăng Ký</button>
-                <p id="registerError" class="error-message"></p>
-                <p class="register-link">Đã có tài khoản? <a href="#" onclick="showLogin()">Đăng nhập</a></p>
-            </form>
-        </div>
-    </div>
-
-    <!-- Modal Kết Bạn -->
-    <div id="addFriendModal" class="modal">
-        <div class="modal-content">
-            <span class="close" onclick="closeModal('addFriendModal')">&times;</span>
-            <div class="modal-icon">🤝</div>
-            <h2>Kết Bạn Qua Email</h2>
-            <form id="addFriendForm">
-                <div class="form-group">
-                    <label>📧 Email bạn bè:</label>
-                    <input type="email" id="friendEmail" placeholder="friend@email.com" required>
-                </div>
-                <button type="submit" class="btn-primary">🔍 Tìm & Kết Bạn</button>
-                <p id="friendError" class="error-message"></p>
-            </form>
-        </div>
-    </div>
-
-    <!-- Modal Cuộc Gọi -->
-    <div id="callModal" class="modal call-modal">
-        <div class="call-container">
-            <div class="call-header">
-                <h3 id="callStatus">📞 Đang gọi...</h3>
-                <span id="callDuration">00:00</span>
+    <div class="container">
+        <h1>📞 VideoCall</h1>
+        
+        <div id="authSection">
+            <h2 id="authTitle">Đăng Ký / Đăng Nhập</h2>
+            <div class="form-group">
+                <label>Email:</label>
+                <input type="email" id="email" placeholder="example@email.com">
             </div>
-            <div class="video-container">
-                <video id="remoteVideo" autoplay playsinline></video>
-                <video id="localVideo" autoplay playsinline muted class="local-video"></video>
+            <div class="form-group">
+                <label>Mật khẩu:</label>
+                <input type="password" id="password" placeholder="Ít nhất 6 ký tự">
             </div>
-            <div class="call-controls">
-                <button onclick="toggleMute()" id="muteBtn" class="call-btn">🎤</button>
-                <button onclick="toggleVideo()" id="videoBtn" class="call-btn">📹</button>
-                <button onclick="endCall()" class="call-btn end-btn">📵</button>
+            <button id="authBtn" onclick="handleAuth()">Đăng Ký</button>
+            <p style="margin-top:10px;">
+                <a href="#" onclick="toggleAuthMode()" id="toggleLink">Đã có tài khoản? Đăng nhập</a>
+            </p>
+        </div>
+        
+        <div id="mainSection" style="display:none;">
+            <h3 id="userName"></h3>
+            <button onclick="logout()" style="margin-bottom:20px;background:#ef4444;">Đăng Xuất</button>
+            
+            <div class="form-group">
+                <label>ID phòng gọi:</label>
+                <input type="text" id="roomId" placeholder="Nhập ID phòng...">
+            </div>
+            <button id="joinBtn" onclick="joinCall()">📞 Tham Gia Phòng</button>
+            <button onclick="createRoom()" style="margin-top:10px;background:#10b981;">➕ Tạo Phòng Mới</button>
+            
+            <div id="videoContainer">
+                <div id="jitsiContainer"></div>
             </div>
         </div>
     </div>
 
-    <!-- Header -->
-    <header class="header">
-        <div class="container">
-            <div class="header-content">
-                <h1 class="logo">📞 <span>Video</span>Call</h1>
-                <nav class="nav">
-                    <ul>
-                        <li><a href="#" class="active" onclick="showAllUsers()">👥 Tất Cả</a></li>
-                        <li><a href="#" onclick="showFriends()">🤝 Bạn Bè</a></li>
-                        <li><a href="#" onclick="showOnlineUsers()">🟢 Online</a></li>
-                    </ul>
-                </nav>
-                <div class="user-area">
-                    <div id="guestButtons">
-                        <button onclick="showLogin()" class="btn-login">Đăng Nhập</button>
-                        <button onclick="showRegister()" class="btn-register">Đăng Ký</button>
-                    </div>
-                    <div id="userInfo" class="user-info" style="display: none;">
-                        <span id="userName"></span>
-                        <button onclick="showAddFriend()" class="btn-add-friend">+ Kết Bạn</button>
-                        <button onclick="logout()" class="btn-logout">Đăng Xuất</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </header>
-
-    <section class="hero">
-        <div class="container">
-            <h2>📞 Gọi Video Miễn Phí</h2>
-            <p>Kết nối với bạn bè mọi lúc mọi nơi</p>
-        </div>
-    </section>
-
-    <section class="user-list">
-        <div class="container">
-            <h2 class="section-title" id="listTitle">👥 Tất Cả Người Dùng</h2>
-            <div id="userGrid" class="user-grid"></div>
-        </div>
-    </section>
-
-    <footer class="footer">
-        <div class="container">
-            <p>© 2024 VideoCall</p>
-        </div>
-    </footer>
-
+    <script src="https://meet.jit.si/external_api.js"></script>
     <script src="firebase-config.js"></script>
-    <script src="script.js"></script>
+    <script>
+        let isLogin = false;
+        let currentUser = null;
+        let jitsiApi = null;
+
+        function toggleAuthMode() {
+            isLogin = !isLogin;
+            document.getElementById('authTitle').textContent = isLogin ? 'Đăng Nhập' : 'Đăng Ký';
+            document.getElementById('authBtn').textContent = isLogin ? 'Đăng Nhập' : 'Đăng Ký';
+            document.getElementById('toggleLink').textContent = isLogin ? 'Chưa có tài khoản? Đăng ký' : 'Đã có tài khoản? Đăng nhập';
+        }
+
+        async function handleAuth() {
+            const email = document.getElementById('email').value.trim();
+            const password = document.getElementById('password').value;
+            
+            if (!email || !password) {
+                alert('Vui lòng nhập email và mật khẩu!');
+                return;
+            }
+            
+            try {
+                if (isLogin) {
+                    await auth.signInWithEmailAndPassword(email, password);
+                } else {
+                    await auth.createUserWithEmailAndPassword(email, password);
+                }
+                
+                document.getElementById('authSection').style.display = 'none';
+                document.getElementById('mainSection').style.display = 'block';
+                document.getElementById('userName').textContent = '👤 ' + email;
+                currentUser = auth.currentUser;
+                
+            } catch (error) {
+                alert('Lỗi: ' + error.message);
+            }
+        }
+
+        async function logout() {
+            await auth.signOut();
+            document.getElementById('authSection').style.display = 'block';
+            document.getElementById('mainSection').style.display = 'none';
+            if (jitsiApi) jitsiApi.dispose();
+        }
+
+        function createRoom() {
+            const roomId = Math.random().toString(36).substring(7);
+            document.getElementById('roomId').value = roomId;
+            joinCall();
+        }
+
+        function joinCall() {
+            const roomId = document.getElementById('roomId').value.trim();
+            if (!roomId) {
+                alert('Vui lòng nhập ID phòng!');
+                return;
+            }
+            
+            document.getElementById('videoContainer').style.display = 'block';
+            
+            const domain = 'meet.jit.si';
+            const options = {
+                roomName: 'videocall-' + roomId,
+                width: '100%',
+                height: 500,
+                parentNode: document.getElementById('jitsiContainer'),
+                userInfo: {
+                    displayName: currentUser ? currentUser.email : 'User'
+                }
+            };
+            
+            if (jitsiApi) jitsiApi.dispose();
+            jitsiApi = new JitsiMeetExternalAPI(domain, options);
+        }
+
+        auth.onAuthStateChanged((user) => {
+            if (user) {
+                currentUser = user;
+                document.getElementById('authSection').style.display = 'none';
+                document.getElementById('mainSection').style.display = 'block';
+                document.getElementById('userName').textContent = '👤 ' + user.email;
+            }
+        });
+    </script>
 </body>
 </html>
