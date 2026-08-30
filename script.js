@@ -266,15 +266,12 @@ async function loadUsers() {
     } finally { hideLoading(); }
 }
 
-// ============ WEBRTC GỌI ĐIỆN ============
+// ============ WEBRTC - GỌI ĐIỆN ============
 
 async function startCall(calleeId, calleeName) {
     if (!currentUser) { showToast('Vui lòng đăng nhập!', 'error'); return; }
     
     try {
-        // Xóa document cũ
-        await db.collection('calls').doc(calleeId).delete().catch(() => {});
-        
         const calleeDoc = await db.collection('users').doc(calleeId).get();
         const calleeData = calleeDoc.data();
         if (!calleeData.isOnline) { showToast(`${calleeName} đang offline!`, 'error'); return; }
@@ -286,13 +283,13 @@ async function startCall(calleeId, calleeName) {
         openModal('callModal');
         
         currentPeerId = calleeId;
+        callDocRef = db.collection('calls').doc(calleeId);
         
         await createPeerConnection();
         
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
         
-        callDocRef = db.collection('calls').doc(calleeId);
         await callDocRef.set({
             offer: { type: offer.type, sdp: offer.sdp },
             callerId: currentUser.uid,
@@ -359,13 +356,15 @@ function listenForCallStatus(calleeId) {
 function listenForIncomingCalls() {
     if (!currentUser) return;
     
+    console.log('👂 Đang lắng nghe cuộc gọi đến...');
+    
     db.collection('calls').doc(currentUser.uid).onSnapshot(async (doc) => {
         if (doc.exists) {
             const data = doc.data();
+            console.log('📞 Nhận:', data.status, 'từ', data.callerName);
             
             if (data.status === 'ringing' && 
                 data.calleeId === currentUser.uid && 
-                !peerConnection && 
                 !incomingCallData) {
                 
                 incomingCallData = data;
@@ -447,7 +446,6 @@ function startCallTimer() {
 // ============ CHIA SẺ MÀN HÌNH ============
 async function toggleScreenShare() {
     if (!peerConnection) { showToast('Chưa có cuộc gọi!', 'error'); return; }
-    
     try {
         if (!isScreenSharing) {
             screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
