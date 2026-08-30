@@ -33,14 +33,38 @@ auth.onAuthStateChanged((user) => {
     loadUsers();
 });
 
+// Cập nhật trạng thái online/offline
 async function updateUserOnlineStatus(userId, isOnline) {
     try {
         await db.collection('users').doc(userId).update({
             isOnline: isOnline,
             lastSeen: firebase.firestore.FieldValue.serverTimestamp()
         });
-    } catch (error) {}
+    } catch (error) {
+        console.error('Error updating online status:', error);
+    }
 }
+
+// Khi người dùng đóng trang → offline
+window.addEventListener('beforeunload', () => {
+    if (currentUser) {
+        db.collection('users').doc(currentUser.uid).update({
+            isOnline: false,
+            lastSeen: firebase.firestore.FieldValue.serverTimestamp()
+        }).catch(() => {});
+    }
+});
+
+// Khi người dùng rời trang → offline
+document.addEventListener('visibilitychange', () => {
+    if (currentUser) {
+        if (document.hidden) {
+            db.collection('users').doc(currentUser.uid).update({ isOnline: false }).catch(() => {});
+        } else {
+            db.collection('users').doc(currentUser.uid).update({ isOnline: true }).catch(() => {});
+        }
+    }
+});
 
 function updateUIForLoggedInUser(user) {
     document.getElementById('guestButtons').style.display = 'none';
@@ -93,6 +117,7 @@ document.getElementById('registerForm').addEventListener('submit', async (e) => 
         await userCredential.user.updateProfile({ displayName: name });
         await db.collection('users').doc(userCredential.user.uid).set({
             name, email, friends: [], friendRequests: [], isOnline: true,
+            lastSeen: firebase.firestore.FieldValue.serverTimestamp(),
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         hideLoading();
@@ -237,7 +262,7 @@ async function loadUsers() {
             const friends = currentData.friends || [];
             users = users.filter(user => friends.includes(user.id));
         }
-        if (currentList === 'online') users = users.filter(user => user.isOnline);
+        if (currentList === 'online') users = users.filter(user => user.isOnline === true);
         if (users.length === 0) {
             userGrid.innerHTML = '<p style="text-align:center;padding:40px;color:#64748b;">Không có người dùng nào.</p>';
             hideLoading();
@@ -300,6 +325,8 @@ async function startCall(calleeId, calleeName) {
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         
+        console.log('📞 Đã gửi cuộc gọi đến:', calleeName);
+        
         listenForCallStatus(calleeId);
         startCallTimer();
         
@@ -356,16 +383,17 @@ function listenForCallStatus(calleeId) {
 function listenForIncomingCalls() {
     if (!currentUser) return;
     
-    console.log('👂 Đang lắng nghe cuộc gọi đến...');
+    console.log('👂 Đang lắng nghe cuộc gọi đến cho:', currentUser.uid);
     
     db.collection('calls').doc(currentUser.uid).onSnapshot(async (doc) => {
         if (doc.exists) {
             const data = doc.data();
-            console.log('📞 Nhận:', data.status, 'từ', data.callerName);
+            console.log('📞 Nhận document:', data.status, 'từ', data.callerName);
             
             if (data.status === 'ringing' && 
                 data.calleeId === currentUser.uid && 
-                !incomingCallData) {
+                !incomingCallData && 
+                !peerConnection) {
                 
                 incomingCallData = data;
                 const accept = confirm(`📞 ${data.callerName} đang gọi video!\n\nChấp nhận cuộc gọi?`);
