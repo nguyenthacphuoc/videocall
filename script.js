@@ -1,40 +1,21 @@
-// Firebase đã được khởi tạo trong firebase-config.js
-
 let currentUser = null;
-let currentList = 'all';
+let jitsiApi = null;
 
-// Theo dõi trạng thái đăng nhập
 auth.onAuthStateChanged((user) => {
     currentUser = user;
     if (user) {
-        showMainSection(user);
+        document.getElementById('guestButtons').style.display = 'none';
+        document.getElementById('userInfo').style.display = 'flex';
+        document.getElementById('userName').textContent = '👤 ' + (user.displayName || user.email);
         setUserOnline(user.uid, true);
         listenForFriendRequests();
+        loadPublicRooms();
     } else {
-        showAuthSection();
+        document.getElementById('guestButtons').style.display = 'flex';
+        document.getElementById('userInfo').style.display = 'none';
     }
     loadUsers();
 });
-
-// ============ UI ============
-function showMainSection(user) {
-    document.getElementById('authSection').style.display = 'none';
-    document.getElementById('mainSection').style.display = 'block';
-    document.getElementById('userName').textContent = '👤 ' + (user.displayName || user.email);
-}
-
-function showAuthSection() {
-    document.getElementById('authSection').style.display = 'block';
-    document.getElementById('mainSection').style.display = 'none';
-}
-
-function showToast(message, type = 'info') {
-    const toast = document.createElement('div');
-    toast.style.cssText = `position:fixed;top:20px;right:20px;padding:15px 25px;border-radius:10px;color:white;font-weight:600;z-index:99999;background:${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#6366f1'};`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 3000);
-}
 
 // ============ ONLINE STATUS ============
 async function setUserOnline(userId, isOnline) {
@@ -52,223 +33,238 @@ window.addEventListener('beforeunload', () => {
     }
 });
 
-// ============ ĐĂNG KÝ / ĐĂNG NHẬP ============
-let isLogin = false;
+// ============ MODAL ============
+function openModal(id) { document.getElementById(id).style.display = 'block'; }
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+function showLogin() { closeModal('registerModal'); closeModal('addFriendModal'); openModal('loginModal'); }
+function showRegister() { closeModal('loginModal'); closeModal('addFriendModal'); openModal('registerModal'); }
+function showAddFriend() { closeModal('loginModal'); closeModal('registerModal'); openModal('addFriendModal'); }
 
-function toggleAuthMode() {
-    isLogin = !isLogin;
-    document.getElementById('authTitle').textContent = isLogin ? 'Đăng Nhập' : 'Đăng Ký';
-    document.getElementById('authBtn').textContent = isLogin ? 'Đăng Nhập' : 'Đăng Ký';
-    document.getElementById('toggleLink').textContent = isLogin ? 'Chưa có tài khoản? Đăng ký' : 'Đã có tài khoản? Đăng nhập';
-}
-
-async function handleAuth() {
-    const email = document.getElementById('email').value.trim();
-    const password = document.getElementById('password').value;
-    
-    if (!email || !password) {
-        alert('Vui lòng nhập email và mật khẩu!');
-        return;
-    }
+// ============ AUTH ============
+async function handleLogin() {
+    const email = document.getElementById('loginEmail').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    if (!email || !password) { alert('Nhập đầy đủ!'); return; }
     
     try {
-        if (isLogin) {
-            const result = await auth.signInWithEmailAndPassword(email, password);
-            console.log('✅ Đăng nhập thành công!');
-        } else {
-            const result = await auth.createUserWithEmailAndPassword(email, password);
-            // Tạo user trong Firestore
-            await db.collection('users').doc(result.user.uid).set({
-                name: email.split('@')[0],
-                email: email,
-                friends: [],
-                friendRequests: [],
-                isOnline: true,
-                createdAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
-            console.log('✅ Đăng ký thành công!');
-        }
-        
-        document.getElementById('email').value = '';
-        document.getElementById('password').value = '';
-        
+        await auth.signInWithEmailAndPassword(email, password);
+        closeModal('loginModal');
+        document.getElementById('loginEmail').value = '';
+        document.getElementById('loginPassword').value = '';
+        alert('✅ Đăng nhập thành công!');
     } catch (error) {
-        let message = 'Lỗi!';
-        if (error.code === 'auth/email-already-in-use') message = 'Email đã được sử dụng!';
-        if (error.code === 'auth/user-not-found') message = 'Email không tồn tại!';
-        if (error.code === 'auth/wrong-password') message = 'Mật khẩu không đúng!';
-        if (error.code === 'auth/weak-password') message = 'Mật khẩu quá yếu!';
-        alert(message);
+        alert('❌ ' + error.message);
+    }
+}
+
+async function handleRegister() {
+    const name = document.getElementById('regName').value.trim();
+    const email = document.getElementById('regEmail').value.trim();
+    const password = document.getElementById('regPassword').value;
+    if (!name || !email || !password) { alert('Nhập đầy đủ!'); return; }
+    
+    try {
+        const result = await auth.createUserWithEmailAndPassword(email, password);
+        await result.user.updateProfile({ displayName: name });
+        await db.collection('users').doc(result.user.uid).set({
+            name, email,
+            friends: [],
+            friendRequests: [],
+            isOnline: true,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        closeModal('registerModal');
+        alert('✅ Đăng ký thành công!');
+    } catch (error) {
+        alert('❌ ' + error.message);
     }
 }
 
 async function logout() {
     if (currentUser) await setUserOnline(currentUser.uid, false);
     await auth.signOut();
-    showToast('Đã đăng xuất!', 'info');
+}
+
+// ============ PHÒNG CÔNG KHAI ============
+async function createRoom() {
+    if (!currentUser) { alert('Đăng nhập trước!'); return; }
+    
+    const roomId = Math.random().toString(36).substring(7);
+    
+    try {
+        // Lưu phòng vào Firestore (collection: public_rooms)
+        await db.collection('public_rooms').add({
+            roomId: roomId,
+            createdBy: currentUser.uid,
+            creatorName: currentUser.displayName || currentUser.email,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+            active: true
+        });
+        
+        document.getElementById('roomId').value = roomId;
+        joinCall();
+        alert('✅ Đã tạo phòng: ' + roomId);
+    } catch (error) {
+        alert('❌ ' + error.message);
+    }
+}
+
+async function loadPublicRooms() {
+    const roomList = document.getElementById('publicRoomsList');
+    if (!roomList) return;
+    
+    try {
+        const snapshot = await db.collection('public_rooms')
+            .where('active', '==', true)
+            .orderBy('createdAt', 'desc')
+            .limit(20)
+            .get();
+        
+        if (snapshot.empty) {
+            roomList.innerHTML = '<p style="color:#64748b;text-align:center;">Chưa có phòng nào đang mở.</p>';
+            return;
+        }
+        
+        roomList.innerHTML = '';
+        
+        snapshot.docs.forEach(doc => {
+            const room = doc.data();
+            const div = document.createElement('div');
+            div.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:12px;background:#f8fafc;border-radius:8px;margin-bottom:8px;';
+            div.innerHTML = `
+                <div>
+                    <strong>📞 ${room.roomId}</strong>
+                    <p style="font-size:0.8rem;color:#64748b;">Tạo bởi: ${room.creatorName}</p>
+                </div>
+                <button class="btn btn-primary" onclick="joinRoom('${room.roomId}')">Tham Gia</button>
+            `;
+            roomList.appendChild(div);
+        });
+    } catch (error) {
+        console.error('Error:', error);
+    }
+}
+
+function joinRoom(roomId) {
+    document.getElementById('roomId').value = roomId;
+    joinCall();
 }
 
 // ============ JITSI MEET ============
-let jitsiApi = null;
-
-function createRoom() {
-    const roomId = Math.random().toString(36).substring(7);
-    document.getElementById('roomId').value = roomId;
-    joinCall();
-    showToast('✅ Đã tạo phòng: ' + roomId, 'success');
-}
-
 function joinCall() {
     const roomId = document.getElementById('roomId').value.trim();
-    if (!roomId) {
-        alert('Vui lòng nhập ID phòng!');
-        return;
-    }
+    if (!roomId) { alert('Nhập ID phòng!'); return; }
     
-    document.getElementById('videoContainer').style.display = 'block';
+    const videoContainer = document.getElementById('videoContainer');
+    videoContainer.style.display = 'block';
     
-    const domain = 'meet.jit.si';
     const options = {
         roomName: 'videocall-' + roomId,
         width: '100%',
         height: 500,
         parentNode: document.getElementById('jitsiContainer'),
-        userInfo: {
-            displayName: currentUser ? (currentUser.displayName || currentUser.email) : 'User'
-        },
+        userInfo: { displayName: currentUser ? (currentUser.displayName || currentUser.email) : 'Khách' },
         configOverwrite: {
             startWithAudioMuted: false,
-            startWithVideoMuted: false,
-            enableClosePage: false
-        },
-        interfaceConfigOverwrite: {
-            filmStripOnly: false,
-            SHOW_JITSI_WATERMARK: false,
-            SHOW_WATERMARK_FOR_GUESTS: false,
-            SHOW_BRAND_WATERMARK: false,
-            SHOW_POWERED_BY: false,
-            SHOW_PROMOTIONAL_CLOSE_PAGE: false
+            startWithVideoMuted: false
         }
     };
     
     if (jitsiApi) jitsiApi.dispose();
-    jitsiApi = new JitsiMeetExternalAPI(domain, options);
+    jitsiApi = new JitsiMeetExternalAPI('meet.jit.si', options);
     
-    showToast('📞 Đã tham gia phòng: ' + roomId, 'success');
+    // Full màn hình
+    setTimeout(() => {
+        const container = document.getElementById('videoContainer');
+        if (container.requestFullscreen) container.requestFullscreen();
+    }, 1000);
+    
+    // Khi rời phòng
+    jitsiApi.on('readyToClose', () => {
+        exitCall();
+    });
+}
+
+function exitCall() {
+    if (jitsiApi) {
+        jitsiApi.dispose();
+        jitsiApi = null;
+    }
+    
+    // Thoát full màn hình
+    if (document.fullscreenElement) document.exitFullscreen();
+    
+    document.getElementById('videoContainer').style.display = 'none';
+    document.getElementById('jitsiContainer').innerHTML = '';
 }
 
 // ============ KẾT BẠN ============
-async function sendFriendRequest() {
-    if (!currentUser) { alert('Vui lòng đăng nhập!'); return; }
+async function handleAddFriend() {
+    if (!currentUser) { alert('Đăng nhập trước!'); return; }
     
     const friendEmail = document.getElementById('friendEmail').value.trim();
-    if (!friendEmail) { alert('Vui lòng nhập email!'); return; }
-    if (friendEmail === currentUser.email) { alert('Không thể kết bạn với chính mình!'); return; }
+    if (!friendEmail) { alert('Nhập email!'); return; }
     
     try {
         const snapshot = await db.collection('users').where('email', '==', friendEmail).get();
-        
-        if (snapshot.empty) {
-            alert('Không tìm thấy email này!');
-            return;
-        }
+        if (snapshot.empty) { alert('Không tìm thấy email!'); return; }
         
         const friendDoc = snapshot.docs[0];
-        const friendId = friendDoc.id;
         const friendData = friendDoc.data();
-        
-        // Kiểm tra đã là bạn
-        const myDoc = await db.collection('users').doc(currentUser.uid).get();
-        const myData = myDoc.data();
-        const myFriends = myData.friends || [];
-        
-        if (myFriends.includes(friendId)) {
-            alert('Đã là bạn bè!');
-            return;
-        }
-        
-        // Kiểm tra đã gửi lời mời
         const theirRequests = friendData.friendRequests || [];
+        
         if (theirRequests.some(r => r.userId === currentUser.uid)) {
             alert('Đã gửi lời mời!');
             return;
         }
         
-        // Gửi lời mời
         theirRequests.push({
             userId: currentUser.uid,
-            name: myData.name || currentUser.email,
-            email: currentUser.email,
-            createdAt: new Date().toISOString()
+            name: currentUser.displayName || currentUser.email,
+            email: currentUser.email
         });
         
-        await db.collection('users').doc(friendId).update({ friendRequests: theirRequests });
-        
-        document.getElementById('friendEmail').value = '';
-        showToast('✅ Đã gửi lời mời kết bạn!', 'success');
+        await db.collection('users').doc(friendDoc.id).update({ friendRequests: theirRequests });
+        closeModal('addFriendModal');
+        alert('✅ Đã gửi lời mời!');
         loadUsers();
-        
     } catch (error) {
-        console.error('Error:', error);
-        alert('Lỗi khi gửi lời mời!');
+        alert('❌ ' + error.message);
     }
 }
 
-// Lắng nghe lời mời kết bạn
 function listenForFriendRequests() {
     if (!currentUser) return;
     
     db.collection('users').doc(currentUser.uid).onSnapshot((doc) => {
         if (doc.exists) {
             const data = doc.data();
-            const friendRequests = data.friendRequests || [];
-            
-            if (friendRequests.length > 0) {
-                const request = friendRequests[0];
-                const accept = confirm(`🤝 ${request.name} muốn kết bạn!\n\nChấp nhận?`);
-                
-                if (accept) {
-                    acceptFriendRequest(request);
-                } else {
-                    declineFriendRequest(request);
+            const requests = data.friendRequests || [];
+            if (requests.length > 0) {
+                const req = requests[0];
+                if (confirm(`🤝 ${req.name} muốn kết bạn! Chấp nhận?`)) {
+                    acceptFriend(req);
                 }
             }
         }
     });
 }
 
-async function acceptFriendRequest(request) {
-    try {
-        const myDoc = await db.collection('users').doc(currentUser.uid).get();
-        const myData = myDoc.data();
-        const myFriends = myData.friends || [];
-        if (!myFriends.includes(request.userId)) myFriends.push(request.userId);
-        
-        await db.collection('users').doc(currentUser.uid).update({
-            friends: myFriends,
-            friendRequests: []
-        });
-        
-        const theirDoc = await db.collection('users').doc(request.userId).get();
-        const theirData = theirDoc.data();
-        const theirFriends = theirData.friends || [];
-        if (!theirFriends.includes(currentUser.uid)) theirFriends.push(currentUser.uid);
-        
-        await db.collection('users').doc(request.userId).update({ friends: theirFriends });
-        
-        showToast('✅ Đã kết bạn!', 'success');
-        loadUsers();
-    } catch (error) {}
-}
-
-async function declineFriendRequest(request) {
-    try {
-        const myDoc = await db.collection('users').doc(currentUser.uid).get();
-        const myData = myDoc.data();
-        const friendRequests = myData.friendRequests || [];
-        const updated = friendRequests.filter(r => r.userId !== request.userId);
-        await db.collection('users').doc(currentUser.uid).update({ friendRequests: updated });
-    } catch (error) {}
+async function acceptFriend(req) {
+    const myDoc = await db.collection('users').doc(currentUser.uid).get();
+    const myData = myDoc.data();
+    const myFriends = myData.friends || [];
+    myFriends.push(req.userId);
+    await db.collection('users').doc(currentUser.uid).update({ friends: myFriends, friendRequests: [] });
+    
+    const theirDoc = await db.collection('users').doc(req.userId).get();
+    const theirData = theirDoc.data();
+    const theirFriends = theirData.friends || [];
+    theirFriends.push(currentUser.uid);
+    await db.collection('users').doc(req.userId).update({ friends: theirFriends });
+    
+    alert('✅ Đã kết bạn!');
+    loadUsers();
 }
 
 // ============ LOAD USERS ============
@@ -276,72 +272,51 @@ async function loadUsers() {
     try {
         const snapshot = await db.collection('users').limit(50).get();
         const userGrid = document.getElementById('userGrid');
-        
         if (!userGrid) return;
-        
         userGrid.innerHTML = '';
-        let users = [];
         
         snapshot.docs.forEach(doc => {
             const user = doc.data();
             if (doc.id === currentUser?.uid) return;
-            users.push({ id: doc.id, ...user });
-        });
-        
-        if (users.length === 0) {
-            userGrid.innerHTML = '<p style="text-align:center;padding:40px;">Không có người dùng nào.</p>';
-            return;
-        }
-        
-        for (const user of users) {
+            
             const isFriend = currentUser ? (user.friends || []).includes(currentUser.uid) : false;
-            const hasPendingRequest = currentUser ? (user.friendRequests || []).some(r => r.userId === currentUser.uid) : false;
             
             const card = document.createElement('div');
-            card.style.cssText = 'background:white;border-radius:10px;padding:20px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.1);';
+            card.className = 'user-card';
             card.innerHTML = `
-                <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(user.name || 'User')}&background=6366f1&color=fff&size=80" style="border-radius:50%;margin-bottom:10px;">
+                <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(user.name || 'User')}&background=6366f1&color=fff&size=80" style="border-radius:50%;">
                 <h3>${user.name || 'User'}</h3>
-                <p style="color:${user.isOnline ? '#10b981' : '#64748b'};">
-                    ${user.isOnline ? '🟢 Online' : '⚫ Offline'}
-                </p>
-                <p style="font-size:0.8rem;color:#64748b;">${user.email}</p>
-                ${!isFriend && !hasPendingRequest && currentUser ? 
-                    `<button onclick="quickAddFriend('${user.id}')" style="background:#f59e0b;color:white;border:none;padding:8px 15px;border-radius:20px;cursor:pointer;margin-top:10px;">+ Kết Bạn</button>` : 
-                    isFriend ? '<p style="color:#10b981;margin-top:10px;">✅ Bạn bè</p>' : 
-                    hasPendingRequest ? '<p style="color:#f59e0b;margin-top:10px;">⏳ Đã gửi</p>' : ''}
+                <p style="color:${user.isOnline ? '#10b981' : '#64748b'};">${user.isOnline ? '🟢 Online' : '⚫ Offline'}</p>
+                <p style="font-size:0.8rem;">${user.email}</p>
+                ${isFriend ? '<p style="color:#10b981;">✅ Bạn bè</p>' : currentUser ? `<button class="btn btn-warning" onclick="quickAdd('${doc.id}')">+ Kết Bạn</button>` : ''}
             `;
             userGrid.appendChild(card);
-        }
-    } catch (error) {
-        console.error('Error:', error);
-    }
-}
-
-async function quickAddFriend(friendId) {
-    if (!currentUser) return;
-    
-    try {
-        const friendDoc = await db.collection('users').doc(friendId).get();
-        const friendData = friendDoc.data();
-        const myDoc = await db.collection('users').doc(currentUser.uid).get();
-        const myData = myDoc.data();
-        const myFriends = myData.friends || [];
-        
-        if (myFriends.includes(friendId)) { showToast('Đã là bạn bè!', 'error'); return; }
-        
-        const theirRequests = friendData.friendRequests || [];
-        if (theirRequests.some(r => r.userId === currentUser.uid)) { showToast('Đã gửi!', 'error'); return; }
-        
-        theirRequests.push({
-            userId: currentUser.uid,
-            name: myData.name || currentUser.email,
-            email: currentUser.email,
-            createdAt: new Date().toISOString()
         });
-        
-        await db.collection('users').doc(friendId).update({ friendRequests: theirRequests });
-        showToast('✅ Đã gửi lời mời!', 'success');
-        loadUsers();
     } catch (error) {}
 }
+
+async function quickAdd(friendId) {
+    const friendDoc = await db.collection('users').doc(friendId).get();
+    const friendData = friendDoc.data();
+    const theirRequests = friendData.friendRequests || [];
+    
+    if (theirRequests.some(r => r.userId === currentUser.uid)) {
+        alert('Đã gửi lời mời!');
+        return;
+    }
+    
+    theirRequests.push({
+        userId: currentUser.uid,
+        name: currentUser.displayName || currentUser.email,
+        email: currentUser.email
+    });
+    await db.collection('users').doc(friendId).update({ friendRequests: theirRequests });
+    alert('✅ Đã gửi lời mời!');
+    loadUsers();
+}
+
+function showAllUsers() { loadUsers(); }
+function showFriends() { loadUsers(); }
+function showOnlineUsers() { loadUsers(); }
+
+loadUsers();
