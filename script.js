@@ -43,24 +43,15 @@ async function setUserOnline(userId, isOnline) {
             isOnline: isOnline,
             lastSeen: firebase.firestore.FieldValue.serverTimestamp()
         });
-    } catch (error) {
-        console.error('Error updating online:', error);
-    }
+    } catch (error) {}
 }
 
-// Khi đóng tab → offline
-window.addEventListener('beforeunload', (e) => {
+window.addEventListener('beforeunload', () => {
     if (currentUser) {
-        const userId = currentUser.uid;
-        fetch(`https://firestore.googleapis.com/v1/projects/happy-aa62c/databases/(default)/documents/users/${userId}?updateMask.fieldPaths=isOnline`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ fields: { isOnline: { booleanValue: false } } })
-        }).catch(() => {});
+        db.collection('users').doc(currentUser.uid).update({ isOnline: false }).catch(() => {});
     }
 });
 
-// Khi ẩn tab → offline, khi hiện lại → online
 document.addEventListener('visibilitychange', () => {
     if (!currentUser) return;
     if (document.hidden) {
@@ -69,13 +60,6 @@ document.addEventListener('visibilitychange', () => {
         setUserOnline(currentUser.uid, true);
     }
 });
-
-// Logout → offline
-async function logout() {
-    if (currentUser) await setUserOnline(currentUser.uid, false);
-    await auth.signOut();
-    showToast('Đã đăng xuất!', 'info');
-}
 
 // ============ UI ============
 function updateUIForLoggedInUser(user) {
@@ -117,9 +101,10 @@ function showAddFriend() {
     else { showToast('Vui lòng đăng nhập!', 'error'); showLogin(); }
 }
 
-// ============ POLLING NHẬN CUỘC GỌI ============
+// ============ POLLING - FIX NHẬN CUỘC GỌI ============
 function startPollingForCalls() {
     stopPollingForCalls();
+    console.log('👂 Bắt đầu lắng nghe cuộc gọi...');
     
     pollInterval = setInterval(async () => {
         if (!currentUser) return;
@@ -129,19 +114,30 @@ function startPollingForCalls() {
             
             if (doc.exists) {
                 const data = doc.data();
+                console.log('📞 Kiểm tra:', data.status, 'từ', data.callerName);
                 
-                if (data.status === 'ringing' && data.calleeId === currentUser.uid && !incomingCallData && !peerConnection) {
-                    incomingCallData = data;
-                    const accept = confirm(`📞 ${data.callerName} đang gọi video!\n\nChấp nhận cuộc gọi?`);
+                // NHẬN CUỘC GỌI ĐẾN
+                if (data.status === 'ringing' && 
+                    data.calleeId === currentUser.uid && 
+                    !incomingCallData && 
+                    !peerConnection) {
                     
-                    if (accept) {
-                        await acceptCall(data);
-                    } else {
-                        await db.collection('calls').doc(currentUser.uid).delete().catch(() => {});
-                        incomingCallData = null;
-                    }
+                    console.log('📞 CÓ CUỘC GỌI ĐẾN TỪ:', data.callerName);
+                    incomingCallData = data;
+                    
+                    setTimeout(() => {
+                        const accept = confirm(`📞 ${data.callerName} đang gọi video!\n\nChấp nhận cuộc gọi?`);
+                        
+                        if (accept) {
+                            acceptCall(data);
+                        } else {
+                            db.collection('calls').doc(currentUser.uid).delete().catch(() => {});
+                            incomingCallData = null;
+                        }
+                    }, 100);
                 }
                 
+                // NHẬN ANSWER (cho người gọi)
                 if (data.status === 'answered' && data.answer && peerConnection) {
                     try {
                         await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
@@ -149,12 +145,15 @@ function startPollingForCalls() {
                     } catch (err) {}
                 }
                 
+                // KẾT THÚC
                 if (data.status === 'ended' && peerConnection) {
                     endCall();
                 }
             }
-        } catch (error) {}
-    }, 2000);
+        } catch (error) {
+            console.error('Polling error:', error);
+        }
+    }, 1500);
 }
 
 function stopPollingForCalls() {
@@ -208,6 +207,12 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
         document.getElementById('loginError').textContent = message;
     }
 });
+
+async function logout() {
+    if (currentUser) await setUserOnline(currentUser.uid, false);
+    await auth.signOut();
+    showToast('Đã đăng xuất!', 'info');
+}
 
 // ============ KẾT BẠN ============
 document.getElementById('addFriendForm').addEventListener('submit', async (e) => {
@@ -340,14 +345,21 @@ async function loadUsers() {
     } finally { hideLoading(); }
 }
 
-// ============ WEBRTC ============
+// ============ WEBRTC - BẮT ĐẦU CUỘC GỌI ============
 async function startCall(calleeId, calleeName) {
     if (!currentUser) { showToast('Vui lòng đăng nhập!', 'error'); return; }
     
     try {
+        // Xóa document cũ
+        await db.collection('calls').doc(calleeId).delete().catch(() => {});
+        
         const calleeDoc = await db.collection('users').doc(calleeId).get();
         const calleeData = calleeDoc.data();
-        if (!calleeData.isOnline) { showToast(`${calleeName} đang offline!`, 'error'); return; }
+        
+        if (!calleeData.isOnline) { 
+            showToast(`${calleeName} đang offline!`, 'error'); 
+            return; 
+        }
         
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         document.getElementById('localVideo').srcObject = localStream;
@@ -376,6 +388,7 @@ async function startCall(calleeId, calleeName) {
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
         
+        console.log('📞 Lưu cuộc gọi đến:', calleeId);
         await callDocRef.set({
             offer: { type: offer.type, sdp: offer.sdp },
             callerId: currentUser.uid,
@@ -386,6 +399,8 @@ async function startCall(calleeId, calleeName) {
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         
+        console.log('📞 Đã gửi cuộc gọi thành công!');
+        
         startCallTimer();
         
     } catch (error) {
@@ -394,6 +409,7 @@ async function startCall(calleeId, calleeName) {
     }
 }
 
+// ============ CHẤP NHẬN CUỘC GỌI ============
 async function acceptCall(data) {
     try {
         currentPeerId = data.callerId;
