@@ -7,12 +7,14 @@ auth.onAuthStateChanged((user) => {
         document.getElementById('guestButtons').style.display = 'none';
         document.getElementById('userInfo').style.display = 'flex';
         document.getElementById('userName').textContent = '👤 ' + (user.displayName || user.email);
+        document.getElementById('publicRoomsCard').style.display = 'block';
         setUserOnline(user.uid, true);
         listenForFriendRequests();
         loadPublicRooms();
     } else {
         document.getElementById('guestButtons').style.display = 'flex';
         document.getElementById('userInfo').style.display = 'none';
+        document.getElementById('publicRoomsCard').style.display = 'none';
     }
     loadUsers();
 });
@@ -74,6 +76,9 @@ async function handleRegister() {
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         closeModal('registerModal');
+        document.getElementById('regName').value = '';
+        document.getElementById('regEmail').value = '';
+        document.getElementById('regPassword').value = '';
         alert('✅ Đăng ký thành công!');
     } catch (error) {
         alert('❌ ' + error.message);
@@ -82,6 +87,7 @@ async function handleRegister() {
 
 async function logout() {
     if (currentUser) await setUserOnline(currentUser.uid, false);
+    if (jitsiApi) { jitsiApi.dispose(); jitsiApi = null; }
     await auth.signOut();
 }
 
@@ -92,7 +98,6 @@ async function createRoom() {
     const roomId = Math.random().toString(36).substring(7);
     
     try {
-        // Lưu phòng vào Firestore (collection: public_rooms)
         await db.collection('public_rooms').add({
             roomId: roomId,
             createdBy: currentUser.uid,
@@ -104,6 +109,7 @@ async function createRoom() {
         document.getElementById('roomId').value = roomId;
         joinCall();
         alert('✅ Đã tạo phòng: ' + roomId);
+        loadPublicRooms();
     } catch (error) {
         alert('❌ ' + error.message);
     }
@@ -130,7 +136,7 @@ async function loadPublicRooms() {
         snapshot.docs.forEach(doc => {
             const room = doc.data();
             const div = document.createElement('div');
-            div.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:12px;background:#f8fafc;border-radius:8px;margin-bottom:8px;';
+            div.className = 'room-item';
             div.innerHTML = `
                 <div>
                     <strong>📞 ${room.roomId}</strong>
@@ -150,7 +156,7 @@ function joinRoom(roomId) {
     joinCall();
 }
 
-// ============ JITSI MEET ============
+// ============ JITSI MEET (8x8.vc - Không giới hạn) ============
 function joinCall() {
     const roomId = document.getElementById('roomId').value.trim();
     if (!roomId) { alert('Nhập ID phòng!'); return; }
@@ -166,12 +172,21 @@ function joinCall() {
         userInfo: { displayName: currentUser ? (currentUser.displayName || currentUser.email) : 'Khách' },
         configOverwrite: {
             startWithAudioMuted: false,
-            startWithVideoMuted: false
+            startWithVideoMuted: false,
+            disableDeepLinking: true
+        },
+        interfaceConfigOverwrite: {
+            SHOW_JITSI_WATERMARK: false,
+            SHOW_WATERMARK_FOR_GUESTS: false,
+            SHOW_BRAND_WATERMARK: false,
+            SHOW_POWERED_BY: false
         }
     };
     
     if (jitsiApi) jitsiApi.dispose();
-    jitsiApi = new JitsiMeetExternalAPI('meet.jit.si', options);
+    
+    // Dùng 8x8.vc - Không giới hạn thời gian
+    jitsiApi = new JitsiMeetExternalAPI('8x8.vc', options);
     
     // Full màn hình
     setTimeout(() => {
@@ -191,7 +206,6 @@ function exitCall() {
         jitsiApi = null;
     }
     
-    // Thoát full màn hình
     if (document.fullscreenElement) document.exitFullscreen();
     
     document.getElementById('videoContainer').style.display = 'none';
@@ -204,6 +218,7 @@ async function handleAddFriend() {
     
     const friendEmail = document.getElementById('friendEmail').value.trim();
     if (!friendEmail) { alert('Nhập email!'); return; }
+    if (friendEmail === currentUser.email) { alert('Không thể kết bạn với chính mình!'); return; }
     
     try {
         const snapshot = await db.collection('users').where('email', '==', friendEmail).get();
@@ -226,6 +241,7 @@ async function handleAddFriend() {
         
         await db.collection('users').doc(friendDoc.id).update({ friendRequests: theirRequests });
         closeModal('addFriendModal');
+        document.getElementById('friendEmail').value = '';
         alert('✅ Đã gửi lời mời!');
         loadUsers();
     } catch (error) {
@@ -244,6 +260,8 @@ function listenForFriendRequests() {
                 const req = requests[0];
                 if (confirm(`🤝 ${req.name} muốn kết bạn! Chấp nhận?`)) {
                     acceptFriend(req);
+                } else {
+                    declineFriend(req);
                 }
             }
         }
@@ -254,17 +272,25 @@ async function acceptFriend(req) {
     const myDoc = await db.collection('users').doc(currentUser.uid).get();
     const myData = myDoc.data();
     const myFriends = myData.friends || [];
-    myFriends.push(req.userId);
+    if (!myFriends.includes(req.userId)) myFriends.push(req.userId);
     await db.collection('users').doc(currentUser.uid).update({ friends: myFriends, friendRequests: [] });
     
     const theirDoc = await db.collection('users').doc(req.userId).get();
     const theirData = theirDoc.data();
     const theirFriends = theirData.friends || [];
-    theirFriends.push(currentUser.uid);
+    if (!theirFriends.includes(currentUser.uid)) theirFriends.push(currentUser.uid);
     await db.collection('users').doc(req.userId).update({ friends: theirFriends });
     
     alert('✅ Đã kết bạn!');
     loadUsers();
+}
+
+async function declineFriend(req) {
+    const myDoc = await db.collection('users').doc(currentUser.uid).get();
+    const myData = myDoc.data();
+    const requests = myData.friendRequests || [];
+    const updated = requests.filter(r => r.userId !== req.userId);
+    await db.collection('users').doc(currentUser.uid).update({ friendRequests: updated });
 }
 
 // ============ LOAD USERS ============
@@ -275,11 +301,14 @@ async function loadUsers() {
         if (!userGrid) return;
         userGrid.innerHTML = '';
         
+        let count = 0;
         snapshot.docs.forEach(doc => {
             const user = doc.data();
             if (doc.id === currentUser?.uid) return;
+            count++;
             
             const isFriend = currentUser ? (user.friends || []).includes(currentUser.uid) : false;
+            const hasPending = currentUser ? (user.friendRequests || []).some(r => r.userId === currentUser.uid) : false;
             
             const card = document.createElement('div');
             card.className = 'user-card';
@@ -287,15 +316,23 @@ async function loadUsers() {
                 <img src="https://ui-avatars.com/api/?name=${encodeURIComponent(user.name || 'User')}&background=6366f1&color=fff&size=80" style="border-radius:50%;">
                 <h3>${user.name || 'User'}</h3>
                 <p style="color:${user.isOnline ? '#10b981' : '#64748b'};">${user.isOnline ? '🟢 Online' : '⚫ Offline'}</p>
-                <p style="font-size:0.8rem;">${user.email}</p>
-                ${isFriend ? '<p style="color:#10b981;">✅ Bạn bè</p>' : currentUser ? `<button class="btn btn-warning" onclick="quickAdd('${doc.id}')">+ Kết Bạn</button>` : ''}
+                <p style="font-size:0.8rem;color:#64748b;">${user.email}</p>
+                ${isFriend ? '<p style="color:#10b981;">✅ Bạn bè</p>' : hasPending ? '<p style="color:#f59e0b;">⏳ Đã gửi</p>' : currentUser ? `<button class="btn btn-warning" onclick="quickAdd('${doc.id}')">+ Kết Bạn</button>` : ''}
             `;
             userGrid.appendChild(card);
         });
-    } catch (error) {}
+        
+        if (count === 0) {
+            userGrid.innerHTML = '<p style="text-align:center;color:#64748b;padding:20px;">Chưa có người dùng khác.</p>';
+        }
+    } catch (error) {
+        console.error('Error:', error);
+    }
 }
 
 async function quickAdd(friendId) {
+    if (!currentUser) return;
+    
     const friendDoc = await db.collection('users').doc(friendId).get();
     const friendData = friendDoc.data();
     const theirRequests = friendData.friendRequests || [];
