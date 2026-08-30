@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VideoCall - Gọi Điện & Kết Bạn</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📞</text></svg>">
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.0/firebase-firestore-compat.js"></script>
+</head>
+<body>
+    <div id="loadingSpinner" class="loading-spinner" style="display: none;">
+        <div class="spinner"></div>
+    </div>
+
+    <!-- Modal Đăng Nhập -->
+    <div id="loginModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('loginModal')">&times;</span>
+            <div class="modal-icon">🔐</div>
+            <h2>Đăng Nhập</h2>
+            <p class="modal-subtitle">Chào mừng bạn trở lại!</p>
+            <form id="loginForm">
+                <div class="form-group">
+                    <label>📧 Email:</label>
+                    <input type="email" id="loginEmail" placeholder="example@email.com" required>
+                </div>
+                <div class="form-group">
+                    <label>🔒 Mật khẩu:</label>
+                    <input type="password" id="loginPassword" placeholder="Nhập mật khẩu" required>
+                </div>
+                <button type="submit" class="btn-primary">Đăng Nhập</button>
+                <p id="loginError" class="error-message"></p>
+                <p class="register-link">Chưa có tài khoản? <a href="#" onclick="showRegister()">Đăng ký</a></p>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Đăng Ký -->
+    <div id="registerModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('registerModal')">&times;</span>
+            <div class="modal-icon">📝</div>
+            <h2>Tạo Tài Khoản</h2>
+            <p class="modal-subtitle">Tham gia cộng đồng ngay!</p>
+            <form id="registerForm">
+                <div class="form-group">
+                    <label>👤 Họ tên:</label>
+                    <input type="text" id="regName" placeholder="Nguyễn Văn A" required>
+                </div>
+                <div class="form-group">
+                    <label>📧 Email:</label>
+                    <input type="email" id="regEmail" placeholder="example@email.com" required>
+                </div>
+                <div class="form-group">
+                    <label>🔒 Mật khẩu:</label>
+                    <input type="password" id="regPassword" placeholder="Ít nhất 6 ký tự" required minlength="6">
+                </div>
+                <button type="submit" class="btn-primary">Đăng Ký</button>
+                <p id="registerError" class="error-message"></p>
+                <p class="register-link">Đã có tài khoản? <a href="#" onclick="showLogin()">Đăng nhập</a></p>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Kết Bạn -->
+    <div id="addFriendModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal('addFriendModal')">&times;</span>
+            <div class="modal-icon">🤝</div>
+            <h2>Kết Bạn Qua Email</h2>
+            <p class="modal-subtitle">Tìm bạn bè bằng email</p>
+            <form id="addFriendForm">
+                <div class="form-group">
+                    <label>📧 Email bạn bè:</label>
+                    <input type="email" id="friendEmail" placeholder="friend@email.com" required>
+                </div>
+                <button type="submit" class="btn-primary">🔍 Tìm & Kết Bạn</button>
+                <p id="friendError" class="error-message"></p>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal Cuộc Gọi -->
+    <div id="callModal" class="modal call-modal">
+        <div class="call-container">
+            <div class="call-header">
+                <div>
+                    <h3 id="callStatus">📞 Đang gọi...</h3>
+                    <span id="callDuration" class="call-duration">00:00</span>
+                </div>
+            </div>
+            <div class="video-container">
+                <video id="remoteVideo" autoplay playsinline></video>
+                <video id="localVideo" autoplay playsinline muted class="local-video"></video>
+            </div>
+            <div class="call-controls">
+                <button onclick="toggleMute()" id="muteBtn" class="call-btn" title="Tắt/Bật mic">🎤</button>
+                <button onclick="toggleVideo()" id="videoBtn" class="call-btn" title="Tắt/Bật camera">📹</button>
+                <button onclick="toggleScreenShare()" id="screenShareBtn" class="call-btn" title="Chia sẻ màn hình">🖥️</button>
+                <button onclick="endCall()" class="call-btn end-btn" title="Kết thúc">📵</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <h1 class="logo">📞 <span>Video</span>Call</h1>
+                <nav class="nav">
+                    <ul>
+                        <li><a href="#" class="active" onclick="showAllUsers()">👥 Tất Cả</a></li>
+                        <li><a href="#" onclick="showFriends()">🤝 Bạn Bè</a></li>
+                        <li><a href="#" onclick="showOnlineUsers()">🟢 Online</a></li>
+                    </ul>
+                </nav>
+                <div class="user-area">
+                    <div id="guestButtons">
+                        <button onclick="showLogin()" class="btn-login">Đăng Nhập</button>
+                        <button onclick="showRegister()" class="btn-register">Đăng Ký</button>
+                    </div>
+                    <div id="userInfo" class="user-info" style="display: none;">
+                        <span id="userName" class="user-name-display"></span>
+                        <button onclick="showAddFriend()" class="btn-add-friend">+ Kết Bạn</button>
+                        <button onclick="logout()" class="btn-logout">Đăng Xuất</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Hero Banner -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content">
+                <h2>📞 Gọi Video Miễn Phí</h2>
+                <p>Kết nối với bạn bè mọi lúc mọi nơi</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Danh Sách -->
+    <section class="user-list">
+        <div class="container">
+            <h2 class="section-title" id="listTitle">👥 Tất Cả Người Dùng</h2>
+            <div id="userGrid" class="user-grid"></div>
+        </div>
+    </section>
+
+    <footer class="footer">
+        <div class="container">
+            <p>© 2024 VideoCall. Kết nối mọi người.</p>
+        </div>
+    </footer>
+
+    <script src="firebase-config.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
