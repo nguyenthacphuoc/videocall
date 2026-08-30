@@ -13,13 +13,11 @@ let incomingCallData = null;
 let currentPeerId = null;
 let callDocRef = null;
 let pollInterval = null;
-let statusPollInterval = null;
 
 const servers = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' }
     ]
 };
 
@@ -91,10 +89,10 @@ function showAddFriend() {
     else { showToast('Vui lòng đăng nhập!', 'error'); showLogin(); }
 }
 
-// ============ POLLING NHẬN CUỘC GỌI ============
+// ============ POLLING ============
 function startPollingForCalls() {
     stopPollingForCalls();
-    console.log('👂 Bắt đầu lắng nghe cuộc gọi...');
+    console.log('👂 Lắng nghe cuộc gọi...');
     
     pollInterval = setInterval(async () => {
         if (!currentUser) return;
@@ -105,12 +103,7 @@ function startPollingForCalls() {
             if (doc.exists) {
                 const data = doc.data();
                 
-                // Nhận cuộc gọi đến
-                if (data.status === 'ringing' && 
-                    data.calleeId === currentUser.uid && 
-                    !incomingCallData && 
-                    !peerConnection) {
-                    
+                if (data.status === 'ringing' && data.calleeId === currentUser.uid && !incomingCallData && !peerConnection) {
                     incomingCallData = data;
                     const accept = confirm(`📞 ${data.callerName} đang gọi video!\n\nChấp nhận cuộc gọi?`);
                     
@@ -122,37 +115,23 @@ function startPollingForCalls() {
                     }
                 }
                 
-                // Nhận answer (cho người gọi)
                 if (data.status === 'answered' && data.answer && peerConnection) {
                     try {
                         await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
                         document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
-                    } catch (err) {
-                        console.error('Error setting answer:', err);
-                    }
+                    } catch (err) {}
                 }
                 
-                // Kết thúc cuộc gọi
                 if (data.status === 'ended' && peerConnection) {
                     endCall();
                 }
-            } else {
-                // Document bị xóa → kết thúc cuộc gọi
-                if (peerConnection) {
-                    endCall();
-                }
             }
-        } catch (error) {
-            console.error('Polling error:', error);
-        }
-    }, 2000); // Kiểm tra mỗi 2 giây
+        } catch (error) {}
+    }, 2000);
 }
 
 function stopPollingForCalls() {
-    if (pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
-    }
+    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
 }
 
 // ============ ĐĂNG KÝ ============
@@ -340,8 +319,7 @@ async function loadUsers() {
     } finally { hideLoading(); }
 }
 
-// ============ WEBRTC - FIX HOÀN CHỈNH ============
-
+// ============ WEBRTC ============
 async function startCall(calleeId, calleeName) {
     if (!currentUser) { showToast('Vui lòng đăng nhập!', 'error'); return; }
     
@@ -359,7 +337,20 @@ async function startCall(calleeId, calleeName) {
         currentPeerId = calleeId;
         callDocRef = db.collection('calls').doc(calleeId);
         
-        await createPeerConnection();
+        peerConnection = new RTCPeerConnection(servers);
+        remoteStream = new MediaStream();
+        document.getElementById('remoteVideo').srcObject = remoteStream;
+        
+        localStream.getTracks().forEach(track => {
+            peerConnection.addTrack(track, localStream);
+        });
+        
+        peerConnection.ontrack = (event) => {
+            event.streams[0].getTracks().forEach(track => {
+                remoteStream.addTrack(track);
+            });
+            document.getElementById('remoteVideo').srcObject = remoteStream;
+        };
         
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
@@ -374,44 +365,12 @@ async function startCall(calleeId, calleeName) {
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         
-        console.log('📞 Đã gửi cuộc gọi đến:', calleeName);
-        
         startCallTimer();
         
     } catch (error) {
         console.error('Error:', error);
         showToast('Không thể truy cập camera!', 'error');
     }
-}
-
-async function createPeerConnection() {
-    peerConnection = new RTCPeerConnection(servers);
-    remoteStream = new MediaStream();
-    document.getElementById('remoteVideo').srcObject = remoteStream;
-    
-    localStream.getTracks().forEach(track => {
-        peerConnection.addTrack(track, localStream);
-    });
-    
-    peerConnection.ontrack = (event) => {
-        console.log('📹 Nhận track:', event.track.kind);
-        event.streams[0].getTracks().forEach(track => {
-            remoteStream.addTrack(track);
-        });
-        document.getElementById('remoteVideo').srcObject = remoteStream;
-    };
-    
-    peerConnection.onconnectionstatechange = () => {
-        console.log('🔗 Connection state:', peerConnection.connectionState);
-        if (peerConnection.connectionState === 'connected') {
-            document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
-        }
-        if (peerConnection.connectionState === 'disconnected' || 
-            peerConnection.connectionState === 'failed' ||
-            peerConnection.connectionState === 'closed') {
-            endCall();
-        }
-    };
 }
 
 async function acceptCall(data) {
@@ -425,7 +384,21 @@ async function acceptCall(data) {
         document.getElementById('callDuration').textContent = '00:00';
         openModal('callModal');
         
-        await createPeerConnection();
+        peerConnection = new RTCPeerConnection(servers);
+        remoteStream = new MediaStream();
+        document.getElementById('remoteVideo').srcObject = remoteStream;
+        
+        localStream.getTracks().forEach(track => {
+            peerConnection.addTrack(track, localStream);
+        });
+        
+        peerConnection.ontrack = (event) => {
+            event.streams[0].getTracks().forEach(track => {
+                remoteStream.addTrack(track);
+            });
+            document.getElementById('remoteVideo').srcObject = remoteStream;
+        };
+        
         await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
         
         const answer = await peerConnection.createAnswer();
@@ -440,7 +413,7 @@ async function acceptCall(data) {
         incomingCallData = null;
         
     } catch (error) {
-        console.error('Error accepting call:', error);
+        console.error('Error:', error);
         incomingCallData = null;
     }
 }
@@ -464,46 +437,31 @@ async function toggleScreenShare() {
         if (!isScreenSharing) {
             screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
             const screenTrack = screenStream.getVideoTracks()[0];
-            
             const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
-            if (sender) {
-                await sender.replaceTrack(screenTrack);
-            }
-            
+            if (sender) await sender.replaceTrack(screenTrack);
             document.getElementById('localVideo').srcObject = screenStream;
-            
             screenTrack.onended = () => toggleScreenShare();
-            
             isScreenSharing = true;
             document.getElementById('screenShareBtn').textContent = '🖥️ Đang chia sẻ';
-            document.getElementById('screenShareBtn').style.background = '#10b981';
             showToast('Đang chia sẻ màn hình!', 'success');
         } else {
             if (screenStream) screenStream.getTracks().forEach(track => track.stop());
-            
             const cameraTrack = localStream.getVideoTracks()[0];
             const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
-            if (sender && cameraTrack) {
-                await sender.replaceTrack(cameraTrack);
-            }
-            
+            if (sender && cameraTrack) await sender.replaceTrack(cameraTrack);
             document.getElementById('localVideo').srcObject = localStream;
             isScreenSharing = false;
             document.getElementById('screenShareBtn').textContent = '🖥️';
-            document.getElementById('screenShareBtn').style.background = '';
             showToast('Đã dừng chia sẻ!', 'info');
         }
     } catch (error) {
-        console.error('Screen share error:', error);
         showToast('Không thể chia sẻ màn hình!', 'error');
     }
 }
 
 function toggleMute() {
     if (localStream) {
-        localStream.getAudioTracks().forEach(track => { 
-            track.enabled = !track.enabled; 
-        });
+        localStream.getAudioTracks().forEach(track => { track.enabled = !track.enabled; });
         isMuted = !isMuted;
         document.getElementById('muteBtn').textContent = isMuted ? '🔇' : '🎤';
     }
@@ -511,34 +469,28 @@ function toggleMute() {
 
 function toggleVideo() {
     if (localStream) {
-        localStream.getVideoTracks().forEach(track => { 
-            track.enabled = !track.enabled; 
-        });
+        localStream.getVideoTracks().forEach(track => { track.enabled = !track.enabled; });
         isVideoOff = !isVideoOff;
         document.getElementById('videoBtn').textContent = isVideoOff ? '🚫' : '📹';
     }
 }
 
 function endCall() {
-    console.log('📵 Kết thúc cuộc gọi');
-    
     if (callTimer) { clearInterval(callTimer); callTimer = null; }
-    if (peerConnection) { peerConnection.close(); peerConnection = null; }
-    if (localStream) { localStream.getTracks().forEach(track => track.stop()); localStream = null; }
-    if (screenStream) { screenStream.getTracks().forEach(track => track.stop()); screenStream = null; }
     
-    // Cập nhật status ended TRƯỚC khi xóa
     if (callDocRef) {
         callDocRef.update({ status: 'ended' }).catch(() => {});
     }
     
-    // Xóa document sau 2 giây để bên kia kịp nhận
     setTimeout(() => {
-        if (callDocRef) {
-            callDocRef.delete().catch(() => {});
-            callDocRef = null;
-        }
-    }, 2000);
+        if (peerConnection) { peerConnection.close(); peerConnection = null; }
+        if (localStream) { localStream.getTracks().forEach(track => track.stop()); localStream = null; }
+        if (screenStream) { screenStream.getTracks().forEach(track => track.stop()); screenStream = null; }
+    }, 500);
+    
+    setTimeout(() => {
+        if (callDocRef) { callDocRef.delete().catch(() => {}); callDocRef = null; }
+    }, 3000);
     
     isScreenSharing = false;
     isMuted = false;
@@ -546,11 +498,6 @@ function endCall() {
     callSeconds = 0;
     incomingCallData = null;
     currentPeerId = null;
-    
-    document.getElementById('muteBtn').textContent = '🎤';
-    document.getElementById('videoBtn').textContent = '📹';
-    document.getElementById('screenShareBtn').textContent = '🖥️';
-    document.getElementById('screenShareBtn').style.background = '';
     
     closeModal('callModal');
 }
