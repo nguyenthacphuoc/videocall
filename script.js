@@ -21,7 +21,6 @@ const servers = {
     ]
 };
 
-// ============ AUTH ============
 auth.onAuthStateChanged((user) => {
     currentUser = user;
     if (user) {
@@ -36,7 +35,6 @@ auth.onAuthStateChanged((user) => {
     loadUsers();
 });
 
-// ============ ONLINE STATUS ============
 async function setUserOnline(userId, isOnline) {
     try {
         await db.collection('users').doc(userId).update({
@@ -52,16 +50,6 @@ window.addEventListener('beforeunload', () => {
     }
 });
 
-document.addEventListener('visibilitychange', () => {
-    if (!currentUser) return;
-    if (document.hidden) {
-        setUserOnline(currentUser.uid, false);
-    } else {
-        setUserOnline(currentUser.uid, true);
-    }
-});
-
-// ============ UI ============
 function updateUIForLoggedInUser(user) {
     document.getElementById('guestButtons').style.display = 'none';
     document.getElementById('userInfo').style.display = 'flex';
@@ -101,63 +89,58 @@ function showAddFriend() {
     else { showToast('Vui lòng đăng nhập!', 'error'); showLogin(); }
 }
 
-// ============ POLLING - FIX NHẬN CUỘC GỌI ============
+// ============ FIREBASE LISTENER (THAY VÌ POLLING) ============
 function startPollingForCalls() {
     stopPollingForCalls();
-    console.log('👂 Bắt đầu lắng nghe cuộc gọi...');
+    console.log('👂 Bắt đầu listener cuộc gọi...');
     
-    pollInterval = setInterval(async () => {
-        if (!currentUser) return;
+    // Dùng onSnapshot thay vì polling
+    db.collection('calls').doc(currentUser.uid).onSnapshot(async (doc) => {
+        if (!doc.exists) return;
         
-        try {
-            const doc = await db.collection('calls').doc(currentUser.uid).get();
+        const data = doc.data();
+        console.log('📞 Update:', data.status);
+        
+        // NHẬN CUỘC GỌI ĐẾN
+        if (data.status === 'ringing' && 
+            data.calleeId === currentUser.uid && 
+            !incomingCallData && 
+            !peerConnection) {
             
-            if (doc.exists) {
-                const data = doc.data();
-                console.log('📞 Kiểm tra:', data.status, 'từ', data.callerName);
-                
-                // NHẬN CUỘC GỌI ĐẾN
-                if (data.status === 'ringing' && 
-                    data.calleeId === currentUser.uid && 
-                    !incomingCallData && 
-                    !peerConnection) {
-                    
-                    console.log('📞 CÓ CUỘC GỌI ĐẾN TỪ:', data.callerName);
-                    incomingCallData = data;
-                    
-                    setTimeout(() => {
-                        const accept = confirm(`📞 ${data.callerName} đang gọi video!\n\nChấp nhận cuộc gọi?`);
-                        
-                        if (accept) {
-                            acceptCall(data);
-                        } else {
-                            db.collection('calls').doc(currentUser.uid).delete().catch(() => {});
-                            incomingCallData = null;
-                        }
-                    }, 100);
-                }
-                
-                // NHẬN ANSWER (cho người gọi)
-                if (data.status === 'answered' && data.answer && peerConnection) {
-                    try {
-                        await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
-                        document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
-                    } catch (err) {}
-                }
-                
-                // KẾT THÚC
-                if (data.status === 'ended' && peerConnection) {
-                    endCall();
-                }
+            console.log('📞 CÓ CUỘC GỌI ĐẾN!');
+            incomingCallData = data;
+            
+            const accept = confirm(`📞 ${data.callerName} đang gọi video!\n\nChấp nhận cuộc gọi?`);
+            
+            if (accept) {
+                await acceptCall(data);
+            } else {
+                await db.collection('calls').doc(currentUser.uid).delete().catch(() => {});
+                incomingCallData = null;
             }
-        } catch (error) {
-            console.error('Polling error:', error);
         }
-    }, 1500);
+        
+        // NHẬN ANSWER (cho người gọi)
+        if (data.status === 'answered' && data.answer && peerConnection) {
+            console.log('📞 Nhận answer!');
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+                document.getElementById('callStatus').textContent = '✅ Đã kết nối!';
+            } catch (err) {
+                console.error('Error setting answer:', err);
+            }
+        }
+        
+        // KẾT THÚC
+        if (data.status === 'ended' && peerConnection) {
+            console.log('📞 Kết thúc cuộc gọi!');
+            endCall();
+        }
+    });
 }
 
 function stopPollingForCalls() {
-    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    // Không cần clear vì dùng onSnapshot
 }
 
 // ============ ĐĂNG KÝ ============
@@ -345,21 +328,16 @@ async function loadUsers() {
     } finally { hideLoading(); }
 }
 
-// ============ WEBRTC - BẮT ĐẦU CUỘC GỌI ============
+// ============ WEBRTC ============
 async function startCall(calleeId, calleeName) {
     if (!currentUser) { showToast('Vui lòng đăng nhập!', 'error'); return; }
     
     try {
-        // Xóa document cũ
         await db.collection('calls').doc(calleeId).delete().catch(() => {});
         
         const calleeDoc = await db.collection('users').doc(calleeId).get();
         const calleeData = calleeDoc.data();
-        
-        if (!calleeData.isOnline) { 
-            showToast(`${calleeName} đang offline!`, 'error'); 
-            return; 
-        }
+        if (!calleeData.isOnline) { showToast(`${calleeName} đang offline!`, 'error'); return; }
         
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         document.getElementById('localVideo').srcObject = localStream;
@@ -388,7 +366,6 @@ async function startCall(calleeId, calleeName) {
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
         
-        console.log('📞 Lưu cuộc gọi đến:', calleeId);
         await callDocRef.set({
             offer: { type: offer.type, sdp: offer.sdp },
             callerId: currentUser.uid,
@@ -399,8 +376,6 @@ async function startCall(calleeId, calleeName) {
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });
         
-        console.log('📞 Đã gửi cuộc gọi thành công!');
-        
         startCallTimer();
         
     } catch (error) {
@@ -409,7 +384,6 @@ async function startCall(calleeId, calleeName) {
     }
 }
 
-// ============ CHẤP NHẬN CUỘC GỌI ============
 async function acceptCall(data) {
     try {
         currentPeerId = data.callerId;
@@ -441,10 +415,13 @@ async function acceptCall(data) {
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
         
+        // Gửi answer
         await callDocRef.update({
             answer: { type: answer.type, sdp: answer.sdp },
             status: 'answered'
         });
+        
+        console.log('📞 Đã gửi answer!');
         
         startCallTimer();
         incomingCallData = null;
@@ -467,7 +444,6 @@ function startCallTimer() {
     }, 1000);
 }
 
-// ============ CHIA SẺ MÀN HÌNH ============
 async function toggleScreenShare() {
     if (!peerConnection) { showToast('Chưa có cuộc gọi!', 'error'); return; }
     try {
